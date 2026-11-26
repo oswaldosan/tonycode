@@ -14,6 +14,7 @@ Para actualizar después de cambios: vuelve a correr `./install.sh`.
 
 ## Qué hace
 
+- **Barra lateral:** cada proyecto tiene una flechita para mostrar u ocultar sus chats. Por defecto quedan expandidos el proyecto actual y los que tienen chats abiertos o algo pendiente; en `···` junto a PROYECTOS puedes expandir todos, colapsar todos o volver al modo automático.
 - **Proyectos en grupos** (Trabajo, Freelance, Personal...). `+ proyecto` abre el selector de carpeta. Flechas para reordenar; clic derecho para cambiar la cuenta, mover a otro grupo o quitar.
 - **Varios chats por proyecto.** Cada chat es una sesión real de `claude` en una terminal integrada. Clic derecho en un chat: renombrar, reiniciar, detener, eliminar.
 - **Cuenta Claude por proyecto** (`work` / `personal`): se lanza con `CLAUDE_CONFIG_DIR=~/.claude-work` o `~/.claude-personal`. Arriba a la derecha eliges la cuenta por defecto para proyectos nuevos.

@@ -60,6 +60,9 @@ pub struct Project {
     pub account: String,
     #[serde(default)]
     pub gh: Option<String>,
+    /// None = automático (expandido si está seleccionado o tiene chats abiertos).
+    #[serde(default)]
+    pub expanded: Option<bool>,
     #[serde(default)]
     pub chats: Vec<ChatCfg>,
 }

@@ -63,6 +63,23 @@ impl ChatRt {
     }
 }
 
+/// Flechita de expandir/colapsar.
+fn chevron(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(14.0, 18.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r, 3.0, Color32::from_rgb(0x2C, 0x2F, 0x36));
+    }
+    let c = r.center();
+    let col = if resp.hovered() { TEXT } else { DIM };
+    let pts = if open {
+        vec![c + vec2(-3.5, -1.5), c + vec2(3.5, -1.5), c + vec2(0.0, 2.5)]
+    } else {
+        vec![c + vec2(-1.5, -3.5), c + vec2(-1.5, 3.5), c + vec2(2.5, 0.0)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+    resp
+}
+
 fn arrow_btn(ui: &mut egui::Ui, up: bool, enabled: bool) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     if enabled && resp.hovered() {
@@ -127,6 +144,8 @@ enum Act {
     Commit,
     Revert,
     SetLang(String),
+    SetExpanded(String, Option<bool>),
+    ExpandAll(Option<bool>),
     PasteImage(String),
     SetTheme(String),
     SetFont(String),
@@ -830,6 +849,7 @@ impl App {
                         path: path.clone(),
                         account: self.cfg.default_account.clone(),
                         gh: None,
+                        expanded: None,
                         chats: vec![],
                     });
                     self.cfg.save();
@@ -1018,6 +1038,20 @@ impl App {
                     t.write(&[0x16]);
                     self.want_focus = true;
                 }
+            }
+            Act::SetExpanded(path, v) => {
+                if let Some(p) = self.cfg.project_mut(&path) {
+                    p.expanded = v;
+                    self.cfg.save();
+                }
+            }
+            Act::ExpandAll(v) => {
+                for g in &mut self.cfg.groups {
+                    for p in &mut g.projects {
+                        p.expanded = v;
+                    }
+                }
+                self.cfg.save();
             }
             Act::SetLang(l) => {
                 crate::i18n::set_lang(&l);
@@ -1412,6 +1446,23 @@ impl App {
                         if ui.small_button(tr("+ proyecto", "+ project")).clicked() {
                             acts.push(Act::AddProject(0));
                         }
+                        ui.menu_button(RichText::new("···").color(MUTED), |ui| {
+                            if ui.button(tr("Expandir todos", "Expand all")).clicked() {
+                                acts.push(Act::ExpandAll(Some(true)));
+                                ui.close_menu();
+                            }
+                            if ui.button(tr("Colapsar todos", "Collapse all")).clicked() {
+                                acts.push(Act::ExpandAll(Some(false)));
+                                ui.close_menu();
+                            }
+                            if ui
+                                .button(tr("Automático (abiertos y con chats activos)", "Automatic (selected and with open chats)"))
+                                .clicked()
+                            {
+                                acts.push(Act::ExpandAll(None));
+                                ui.close_menu();
+                            }
+                        });
                     });
                 });
                 let mut close_ng = false;
@@ -1454,7 +1505,17 @@ impl App {
                         for (pi, p) in g.projects.iter().enumerate() {
                             let sel = self.project.as_deref() == Some(p.path.as_str());
                             let needy = p.chats.iter().any(|c| self.rt.get(&c.id).map(|r| r.attention()).unwrap_or(false));
+                            let live = p.chats.iter().any(|c| {
+                                self.rt.get(&c.id).and_then(|r| r.term.as_ref()).map(|t| t.is_alive()).unwrap_or(false)
+                            });
+                            let expanded = p.expanded.unwrap_or(sel || live || needy);
                             ui.horizontal(|ui| {
+                                if chevron(ui, expanded)
+                                    .on_hover_text(if expanded { tr("Ocultar chats", "Hide chats") } else { tr("Mostrar chats", "Show chats") })
+                                    .clicked()
+                                {
+                                    acts.push(Act::SetExpanded(p.path.clone(), Some(!expanded)));
+                                }
                                 let t = RichText::new(&p.name).color(if sel { TEXT } else { Color32::from_gray(200) });
                                 let r = ui.selectable_label(sel, t);
                                 if r.clicked() {
@@ -1503,7 +1564,7 @@ impl App {
                                     }
                                 });
                             });
-                            if sel {
+                            if expanded {
                                 ui.indent(("chats", &p.path), |ui| {
                                     for c in &p.chats {
                                         let rt = self.rt.get(&c.id);
