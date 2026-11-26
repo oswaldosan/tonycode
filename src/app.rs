@@ -2086,6 +2086,21 @@ fn setup_fonts(ctx: &egui::Context) {
             }
         }
     }
+    // Respaldo de símbolos embebido (✻ ❯ ✓ ⚠ ★ ...): no depende de las fuentes del sistema.
+    fonts.font_data.insert(
+        "tony-sym-mono".into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/TonySymbolsMono.ttf"))),
+    );
+    fonts.font_data.insert(
+        "tony-sym".into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/TonySymbols.ttf"))),
+    );
+    for fam in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
+        let list = fonts.families.entry(fam).or_default();
+        let at = list.iter().position(|n| n == "Hack").map(|i| i + 1).unwrap_or(list.len().min(2));
+        list.insert(at, "tony-sym".into());
+        list.insert(at, "tony-sym-mono".into());
+    }
     ctx.set_fonts(fonts);
 }
 

@@ -56,6 +56,10 @@ Flujo: haz cambios donde quieras, `git push` a master, y la app se actualiza sol
 | Cmd+S | Guardar archivo en el editor |
 | Cmd+V | Pegar en la terminal |
 | Esc | Cerrar panel de GitHub |
+| Seleccionar con el mouse | Copia al portapapeles automáticamente |
+| Doble clic / triple clic | Copia la palabra / la línea |
+| Rueda o trackpad | Scroll del historial (o se envía a Claude si usa el mouse) |
+| Shift+PgUp / Shift+PgDn | Scroll del historial por páginas |
 
 El teclado va a la terminal siempre que no estés escribiendo en un campo de texto.
 
@@ -80,6 +84,5 @@ email = "tu@correo.com"
 
 ## Limitaciones conocidas (v0.1)
 
-- La terminal no permite seleccionar texto con el mouse para copiar todavía.
 - Reordenar proyectos es con flechas, no con arrastrar.
 - Al eliminar un chat con worktree, la carpeta del worktree se conserva (bórrala con `git worktree remove <ruta>`).
