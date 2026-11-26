@@ -1,5 +1,7 @@
 //! Terminal embebida: PTY real + parser vt100, dibujada con egui.
 
+use crate::i18n::tr;
+use crate::trf;
 use egui::{Color32, Event, FontId, Key, Modifiers, Rect, Sense, pos2, vec2};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
@@ -368,10 +370,10 @@ impl Term {
         }
         let mut badge: Option<String> = None;
         if s.scrollback() > 0 {
-            badge = Some(format!("↑ {} líneas · Shift+PgDn o escribe para volver", s.scrollback()));
+            badge = Some(trf!("↑ {} líneas · Shift+PgDn o escribe para volver", "↑ {} lines · Shift+PgDn or type to return", s.scrollback()));
         }
         if self.copied_at.map(|t| t.elapsed().as_secs_f32() < 1.4).unwrap_or(false) {
-            badge = Some("Copiado al portapapeles".into());
+            badge = Some(tr("Copiado al portapapeles", "Copied to clipboard").into());
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
         }
         if let Some(b) = badge {

@@ -1,5 +1,7 @@
 use crate::config::{self, ChatCfg, Config, Project};
 use crate::term::{self, Term};
+use crate::i18n::tr;
+use crate::trf;
 use crate::updater::{self, Upd};
 use crate::{bots, claude, git, ssh};
 use std::sync::{Arc, Mutex};
@@ -124,6 +126,7 @@ enum Act {
     RefreshDiff,
     Commit,
     Revert,
+    SetLang(String),
     SelectBot(String),
     CreateBot,
     SetBotAccount(String, String),
@@ -185,6 +188,7 @@ impl App {
         setup_fonts(&cc.egui_ctx);
         setup_style(&cc.egui_ctx);
         let cfg = Config::load();
+        crate::i18n::set_lang(&cfg.lang);
         cfg.save();
         let last = cfg.last_chat.clone();
         let mut app = Self {
@@ -300,7 +304,7 @@ impl App {
         env.extend(extra_env);
         let rt = self.rt.entry(key.to_string()).or_default();
         if !cwd.exists() {
-            rt.err = Some(format!("La carpeta no existe: {}", cwd.display()));
+            rt.err = Some(trf!("La carpeta no existe: {}", "Folder does not exist: {}", cwd.display()));
             return false;
         }
         match Term::spawn(&prog, &args, &cwd, &env, ctx.clone()) {
@@ -343,7 +347,7 @@ impl App {
                 let acct = self.cfg.account_dir(&bot.account);
                 self.spawn_claude(id, dir, acct, bot.session_id.clone(), None, vec![("TONYCODE_BOT".into(), bot.id.clone())], ctx);
             }
-            Err(e) => self.rt.entry(id.to_string()).or_default().err = Some(format!("No pude preparar la carpeta del bot: {e}")),
+            Err(e) => self.rt.entry(id.to_string()).or_default().err = Some(trf!("No pude preparar la carpeta del bot: {e}", "Could not prepare the bot folder: {e}")),
         }
     }
 
@@ -382,10 +386,10 @@ impl App {
                         chat.worktree = Some(config::short(&wtp));
                         chat.branch = Some(branch);
                     }
-                    Err(e) => self.toast(format!("Sin worktree: {e}")),
+                    Err(e) => self.toast(trf!("Sin worktree: {e}", "No worktree: {e}")),
                 }
             } else {
-                self.toast("La carpeta no es un repo git: chat sin worktree");
+                self.toast(tr("La carpeta no es un repo git: chat sin worktree", "Folder is not a git repo: chat without worktree"));
             }
         }
         self.cfg.project_mut(path)?.chats.push(chat);
@@ -410,28 +414,28 @@ impl App {
             match o.kind.as_str() {
                 "delegate" => {
                     if !bot.allows(&o.project) {
-                        self.bot_event(&bot.id, format!("Rechazada: {} no está asignado a este bot", o.project));
+                        self.bot_event(&bot.id, trf!("Rechazada: {} no está asignado a este bot", "Rejected: {} is not assigned to this bot", o.project));
                         continue;
                     }
                     let pname = self.cfg.project(&o.project).map(|p| p.name.clone()).unwrap_or_default();
                     match self.create_chat(&o.project, o.id.clone(), Some(o.title.clone()), bot.use_worktree, Some(bot.id.clone()), Some(o.text)) {
                         Some(id) => {
                             self.start_chat(&id, ctx);
-                            self.bot_event(&bot.id, format!("Delegada '{}' a {pname}", o.title));
-                            self.toast(format!("{} delegó '{}' a {pname}", bot.name, o.title));
+                            self.bot_event(&bot.id, trf!("Delegada '{}' a {pname}", "Delegated '{}' to {pname}", o.title));
+                            self.toast(trf!("{} delegó '{}' a {pname}", "{} delegated '{}' to {pname}", bot.name, o.title));
                         }
-                        None => self.bot_event(&bot.id, format!("No pude crear la tarea '{}'", o.title)),
+                        None => self.bot_event(&bot.id, trf!("No pude crear la tarea '{}'", "Could not create task '{}'", o.title)),
                     }
                 }
                 "send" => {
                     let owns = self.cfg.find_chat(&o.id).map(|(_, c)| c.bot.as_deref() == Some(bot.id.as_str())).unwrap_or(false);
                     if !owns {
-                        self.bot_event(&bot.id, format!("send rechazado: la tarea {} no es de este bot", &o.id[..8]));
+                        self.bot_event(&bot.id, trf!("send rechazado: la tarea {} no es de este bot", "send rejected: task {} does not belong to this bot", &o.id[..8]));
                         continue;
                     }
                     let needs = self.rt.get(&o.id).map(|r| r.st() == St::Needs).unwrap_or(false);
                     if needs && !bot.allow_approve {
-                        self.bot_event(&bot.id, format!("Bloqueado: la tarea {} espera aprobación del usuario", &o.id[..8]));
+                        self.bot_event(&bot.id, trf!("Bloqueado: la tarea {} espera aprobación del usuario", "Blocked: task {} is waiting for user approval", &o.id[..8]));
                         continue;
                     }
                     if self.rt.get(&o.id).and_then(|r| r.term.as_ref()).is_none() {
@@ -440,7 +444,7 @@ impl App {
                     if let Some(t) = self.rt.get_mut(&o.id).and_then(|r| r.term.as_mut()) {
                         t.write(o.text.as_bytes());
                         self.pending_enter.push((o.id.clone(), Instant::now() + Duration::from_millis(250)));
-                        self.bot_event(&bot.id, format!("Mensaje enviado a {}", &o.id[..8]));
+                        self.bot_event(&bot.id, trf!("Mensaje enviado a {}", "Message sent to {}", &o.id[..8]));
                     }
                 }
                 _ => {}
@@ -554,10 +558,10 @@ impl App {
             } else {
                 if old == St::Running && new == St::Idle && t.started.elapsed().as_secs() > 8 {
                     rt.review = true;
-                    notes.push(format!("Terminó: {name}"));
+                    notes.push(trf!("Terminó: {name}", "Finished: {name}"));
                 }
                 if new == St::Needs && old != St::Needs {
-                    notes.push(format!("Pide permiso: {name}"));
+                    notes.push(trf!("Pide permiso: {name}", "Needs permission: {name}"));
                 }
                 if bell && new != St::Needs {
                     rt.review = true;
@@ -640,7 +644,7 @@ impl App {
             flag.store(false, Ordering::SeqCst);
             c2.request_repaint();
         });
-        self.toast("Buscando actualizaciones...");
+        self.toast(tr("Buscando actualizaciones...", "Checking for updates..."));
     }
 
     fn start_update(&mut self, ctx: &egui::Context) {
@@ -650,7 +654,7 @@ impl App {
                 self.upd_term = Some(t);
                 self.upd_open = true;
             }
-            Err(e) => self.toast(format!("No se pudo iniciar la actualización: {e}")),
+            Err(e) => self.toast(trf!("No se pudo iniciar la actualización: {e}", "Could not start the update: {e}")),
         }
     }
 
@@ -664,9 +668,9 @@ impl App {
         let upd = self.upd.lock().map(|u| u.clone()).unwrap_or_default();
         match upd {
             Upd::Available(_) => self.start_update(ctx),
-            Upd::UpToDate => self.toast(format!("Ya tienes la última versión ({})", updater::short_commit())),
-            Upd::NoRepo => self.toast("Esta instalación no viene de un clon git: clona el repo en ~/tonycode y corre install.sh"),
-            Upd::Error(e) => self.toast(format!("No se pudo buscar actualizaciones: {e}")),
+            Upd::UpToDate => self.toast(trf!("Ya tienes la última versión ({})", "You already have the latest version ({})", updater::short_commit())),
+            Upd::NoRepo => self.toast(tr("Esta instalación no viene de un clon git: clona el repo en ~/tonycode y corre install.sh", "This install is not from a git clone: clone the repo into ~/tonycode and run install.sh")),
+            Upd::Error(e) => self.toast(trf!("No se pudo buscar actualizaciones: {e}", "Could not check for updates: {e}")),
             Upd::Unknown => {}
         }
     }
@@ -697,9 +701,9 @@ impl App {
                 Ok(_) => {
                     ed.dirty = false;
                     let n = ed.path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                    self.toast(format!("Guardado {n}"));
+                    self.toast(trf!("Guardado {n}", "Saved {n}"));
                 }
-                Err(e) => self.toast(format!("No se pudo guardar: {e}")),
+                Err(e) => self.toast(trf!("No se pudo guardar: {e}", "Could not save: {e}")),
             }
         }
     }
@@ -782,10 +786,10 @@ impl App {
                 }
             }
             Act::AddProject(gi) => {
-                if let Some(dir) = rfd::FileDialog::new().set_title("Elige la carpeta del proyecto").pick_folder() {
+                if let Some(dir) = rfd::FileDialog::new().set_title(tr("Elige la carpeta del proyecto", "Choose the project folder")).pick_folder() {
                     let path = config::short(&dir);
                     if self.cfg.find_project(&path).is_some() {
-                        self.toast("Ese proyecto ya está agregado");
+                        self.toast(tr("Ese proyecto ya está agregado", "That project is already added"));
                         return;
                     }
                     let name = dir.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or(path.clone());
@@ -821,7 +825,7 @@ impl App {
                     if p.account != a {
                         p.account = a.clone();
                         self.cfg.save();
-                        self.toast(format!("Los chats usarán claude-{a}. Reinicia el chat para aplicarlo."));
+                        self.toast(trf!("Los chats usarán claude-{a}. Reinicia el chat para aplicarlo.", "Chats will use claude-{a}. Restart the chat to apply it."));
                     }
                 }
             }
@@ -859,7 +863,7 @@ impl App {
                 }
                 self.cfg.save();
                 if let Some(w) = wt {
-                    self.toast(format!("Chat eliminado. El worktree sigue en {w}"));
+                    self.toast(trf!("Chat eliminado. El worktree sigue en {w}", "Chat deleted. The worktree is still at {w}"));
                 }
             }
             Act::Rename(id, name) => {
@@ -904,14 +908,14 @@ impl App {
             }
             Act::OpenFile(path) => {
                 if self.editor.as_ref().map(|e| e.dirty).unwrap_or(false) {
-                    self.toast("Guarda (Cmd+S) o descarta el archivo actual primero");
+                    self.toast(tr("Guarda (Cmd+S) o descarta el archivo actual primero", "Save (Cmd+S) or discard the current file first"));
                     return;
                 }
                 match std::fs::metadata(&path) {
-                    Ok(m) if m.len() > 2_000_000 => self.toast("Archivo muy grande para el editor"),
+                    Ok(m) if m.len() > 2_000_000 => self.toast(tr("Archivo muy grande para el editor", "File too large for the editor")),
                     _ => match std::fs::read_to_string(&path) {
                         Ok(text) => self.editor = Some(Editor { path, text, dirty: false }),
-                        Err(_) => self.toast("No es un archivo de texto"),
+                        Err(_) => self.toast(tr("No es un archivo de texto", "Not a text file")),
                     },
                 }
             }
@@ -952,11 +956,16 @@ impl App {
                 match r {
                     Ok(_) => {
                         self.commit_msg.clear();
-                        self.toast("Commit creado");
+                        self.toast(tr("Commit creado", "Commit created"));
                     }
-                    Err(e) => self.toast(format!("Commit falló: {e}")),
+                    Err(e) => self.toast(trf!("Commit falló: {e}", "Commit failed: {e}")),
                 }
                 self.apply(Act::RefreshDiff, ctx);
+            }
+            Act::SetLang(l) => {
+                crate::i18n::set_lang(&l);
+                self.cfg.lang = l;
+                self.cfg.save();
             }
             Act::SelectBot(id) => {
                 self.bot = Some(id.clone());
@@ -990,7 +999,7 @@ impl App {
                     if b.account != a {
                         b.account = a.clone();
                         self.cfg.save();
-                        self.toast(format!("El bot usará claude-{a}. Reinícialo para aplicarlo."));
+                        self.toast(trf!("El bot usará claude-{a}. Reinícialo para aplicarlo.", "The bot will use claude-{a}. Restart it to apply."));
                     }
                 }
             }
@@ -999,7 +1008,7 @@ impl App {
                     b.allow_approve = !b.allow_approve;
                     let on = b.allow_approve;
                     self.cfg.save();
-                    self.toast(if on { "El bot puede responder prompts de permiso (reinícialo)" } else { "El bot ya no puede aprobar permisos (reinícialo)" });
+                    self.toast(if on { tr("El bot puede responder prompts de permiso (reinícialo)", "The bot can answer permission prompts (restart it)") } else { tr("El bot ya no puede aprobar permisos (reinícialo)", "The bot can no longer approve permissions (restart it)") });
                 }
             }
             Act::RestartBot(id) => {
@@ -1018,13 +1027,13 @@ impl App {
                     self.bot = None;
                 }
                 self.cfg.save();
-                self.toast("Bot eliminado (sus tareas siguen en cada proyecto)");
+                self.toast(tr("Bot eliminado (sus tareas siguen en cada proyecto)", "Bot deleted (its tasks remain in each project)"));
             }
             Act::Revert => {
                 let Some(cwd) = self.active_cwd() else { return };
                 match git::run(&cwd, &["restore", "--staged", "--worktree", "."]) {
-                    Ok(_) => self.toast("Cambios revertidos (los archivos nuevos sin seguimiento se conservan)"),
-                    Err(e) => self.toast(format!("No se pudo revertir: {e}")),
+                    Ok(_) => self.toast(tr("Cambios revertidos (los archivos nuevos sin seguimiento se conservan)", "Changes reverted (new untracked files are kept)")),
+                    Err(e) => self.toast(trf!("No se pudo revertir: {e}", "Could not revert: {e}")),
                 }
                 self.apply(Act::RefreshDiff, ctx);
             }
@@ -1043,22 +1052,32 @@ impl App {
                         ui.set_min_width(220.0);
                         let checking = self.upd_checking.load(std::sync::atomic::Ordering::SeqCst);
                         let busy = checking || self.upd_term.as_ref().map(|t| t.is_alive()).unwrap_or(false);
-                        let label = if busy { "Actualizando..." } else { "Buscar actualización" };
+                        let label = if busy { tr("Actualizando...", "Updating...") } else { tr("Buscar actualización", "Check for updates") };
                         if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
                             self.check_updates(ctx, true);
                             ui.close_menu();
                         }
                         ui.separator();
-                        ui.label(RichText::new(format!("Versión {} · {}", env!("CARGO_PKG_VERSION"), updater::short_commit())).small().color(DIM));
+                        ui.label(RichText::new("Idioma / Language").small().color(MUTED));
+                        ui.horizontal(|ui| {
+                            for (code, name) in [("es", "Español"), ("en", "English")] {
+                                if ui.selectable_label(self.cfg.lang == code, name).clicked() {
+                                    acts.push(Act::SetLang(code.to_string()));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        ui.separator();
+                        ui.label(RichText::new(trf!("Versión {} · {}", "Version {} · {}", env!("CARGO_PKG_VERSION"), updater::short_commit())).small().color(DIM));
                         ui.label(RichText::new(config::short(&updater::source_dir())).small().monospace().color(DIM));
                     });
                     let crumb = match self.chat.as_ref().and_then(|id| self.cfg.find_chat(id)) {
                         Some((p, c)) => format!("{}  /  {}", p.name, c.name),
-                        None => self.bot.as_ref().and_then(|b| self.cfg.bot(b)).map(|b| format!("Bot  /  {}", b.name)).unwrap_or_default(),
+                        None => self.bot.as_ref().and_then(|b| self.cfg.bot(b)).map(|b| trf!("Bot  /  {}", "Bot  /  {}", b.name)).unwrap_or_default(),
                     };
                     ui.label(RichText::new(crumb).color(MUTED).small());
                     ui.add_space(24.0);
-                    let b = egui::Button::new(RichText::new("Ir a proyecto o chat                Cmd+K").color(DIM).small())
+                    let b = egui::Button::new(RichText::new(tr("Ir a proyecto o chat                Cmd+K", "Go to project or chat                Cmd+K")).color(DIM).small())
                         .fill(FIELD)
                         .min_size(vec2(300.0, 26.0));
                     if ui.add(b).clicked() {
@@ -1075,7 +1094,7 @@ impl App {
                                 acts.push(Act::SetDefault(a.name.clone()));
                             }
                         }
-                        ui.label(RichText::new("Cuenta por defecto").small().color(MUTED));
+                        ui.label(RichText::new(tr("Cuenta por defecto", "Default account")).small().color(MUTED));
                     });
                 });
             });
@@ -1089,14 +1108,14 @@ impl App {
                 ui.horizontal_centered(|ui| {
                     let branch = self.chat.as_ref().and_then(|id| self.rt.get(id)).map(|r| r.branch.clone()).unwrap_or_default();
                     if !branch.is_empty() {
-                        ui.label(RichText::new(format!("rama {branch}")).small().color(MUTED));
+                        ui.label(RichText::new(trf!("rama {branch}", "branch {branch}")).small().color(MUTED));
                     }
                     let running = self.rt.values().filter(|r| r.st() == St::Running).count();
                     let agents: usize = self.rt.values().map(|r| r.tracker.running()).sum();
-                    ui.label(RichText::new(format!("{running} chats activos · {agents} sub agentes")).small().color(MUTED));
+                    ui.label(RichText::new(trf!("{running} chats activos · {agents} sub agentes", "{running} active chats · {agents} subagents")).small().color(MUTED));
                     let need = self.rt.values().filter(|r| r.attention()).count();
                     if need > 0 {
-                        ui.label(RichText::new(format!("{need} te necesitan")).small().color(NEED));
+                        ui.label(RichText::new(trf!("{need} te necesitan", "{need} need you")).small().color(NEED));
                     }
                     if let Some((m, t)) = &self.toast {
                         if t.elapsed().as_secs() < 6 {
@@ -1123,28 +1142,28 @@ impl App {
                                 let h = self.gh_hosts.iter().find(|h| &h.alias == a);
                                 format!("GitHub: {}", h.map(|h| h.label()).unwrap_or(a.clone()))
                             }
-                            None => "GitHub: elegir cuenta".into(),
+                            None => tr("GitHub: elegir cuenta", "GitHub: choose account").into(),
                         };
                         if ui.selectable_label(self.gh_open, RichText::new(label).small()).clicked() {
                             self.gh_open = !self.gh_open;
                         }
                         match &upd {
                             Upd::Available(c) => {
-                                let t = RichText::new(format!("Actualización disponible ({})", c.len())).small().strong().color(OK);
+                                let t = RichText::new(trf!("Actualización disponible ({})", "Update available ({})", c.len())).small().strong().color(OK);
                                 if ui.selectable_label(self.upd_open, t).clicked() {
                                     self.upd_open = true;
                                 }
                             }
                             other => {
                                 let tip = match other {
-                                    Upd::NoRepo => "El código fuente no tiene un remoto git configurado".to_string(),
-                                    Upd::UpToDate => "Al día con el repo".to_string(),
-                                    Upd::Error(e) => format!("No se pudo revisar: {e}"),
-                                    _ => "Revisando...".to_string(),
+                                    Upd::NoRepo => tr("El código fuente no tiene un remoto git configurado", "The source folder has no git remote configured").to_string(),
+                                    Upd::UpToDate => tr("Al día con el repo", "Up to date with the repo").to_string(),
+                                    Upd::Error(e) => trf!("No se pudo revisar: {e}", "Could not check: {e}"),
+                                    _ => tr("Revisando...", "Checking...").to_string(),
                                 };
                                 let v = format!("v{} · {}", env!("CARGO_PKG_VERSION"), updater::short_commit());
                                 let r = ui.add(egui::Label::new(RichText::new(v).small().color(DIM)).sense(Sense::click()));
-                                if r.on_hover_text(format!("{tip}\nClic para buscar y actualizar")).clicked() {
+                                if r.on_hover_text(trf!("{tip}\nClic para buscar y actualizar", "{tip}\nClick to check and update")).clicked() {
                                     self.check_updates(ctx, true);
                                 }
                             }
@@ -1168,7 +1187,7 @@ impl App {
                         for c in &p.chats {
                             if let Some(rt) = self.rt.get(&c.id) {
                                 if rt.attention() {
-                                    let why = if rt.st() == St::Needs { "pide permiso" } else { "terminó, revisar" };
+                                    let why = if rt.st() == St::Needs { tr("pide permiso", "needs permission") } else { tr("terminó, revisar", "finished, review") };
                                     inbox.push((c.id.clone(), p.name.clone(), c.name.clone(), why, st_color(rt.st(), rt.review)));
                                 }
                             }
@@ -1176,7 +1195,7 @@ impl App {
                     }
                 }
                 if !inbox.is_empty() {
-                    ui.label(RichText::new(format!("TE NECESITA  {}", inbox.len())).small().strong().color(NEED));
+                    ui.label(RichText::new(trf!("TE NECESITA  {}", "NEEDS YOU  {}", inbox.len())).small().strong().color(NEED));
                     for (id, pn, cn, why, col) in inbox {
                         let t = RichText::new(format!("     {cn}\n     {pn} · {why}")).small().color(TEXT);
                         let b = egui::Button::new(t).fill(Color32::from_rgb(0x1A, 0x1C, 0x20)).min_size(vec2(ui.available_width(), 0.0));
@@ -1190,7 +1209,7 @@ impl App {
                 }
 
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("BOTS").small().strong().color(DIM));
+                    ui.label(RichText::new(tr("BOTS", "BOTS")).small().strong().color(DIM));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button("+ bot").clicked() {
                             self.new_bot = Some(NewBot {
@@ -1204,7 +1223,7 @@ impl App {
                     });
                 });
                 if self.cfg.bots.is_empty() {
-                    ui.label(RichText::new("Un bot líder reparte tickets entre tus proyectos").small().color(DIM));
+                    ui.label(RichText::new(tr("Un bot líder reparte tickets entre tus proyectos", "A lead bot splits tickets across your projects")).small().color(DIM));
                 }
                 let bots_list = self.cfg.bots.clone();
                 for b in &bots_list {
@@ -1219,7 +1238,7 @@ impl App {
                             acts.push(Act::SelectBot(b.id.clone()));
                         }
                         r.context_menu(|ui| {
-                            ui.label(RichText::new("Cuenta Claude del bot").small().color(MUTED));
+                            ui.label(RichText::new(tr("Cuenta Claude del bot", "Bot's Claude account")).small().color(MUTED));
                             for a in &self.cfg.accounts {
                                 if ui.radio(b.account == a.name, format!("claude-{}", a.name)).clicked() {
                                     acts.push(Act::SetBotAccount(b.id.clone(), a.name.clone()));
@@ -1227,17 +1246,17 @@ impl App {
                                 }
                             }
                             ui.separator();
-                            let lbl = if b.allow_approve { "Quitar permiso de aprobar" } else { "Permitir que apruebe permisos" };
+                            let lbl = if b.allow_approve { tr("Quitar permiso de aprobar", "Remove approval permission") } else { tr("Permitir que apruebe permisos", "Allow it to approve permissions") };
                             if ui.button(lbl).clicked() {
                                 acts.push(Act::ToggleBotApprove(b.id.clone()));
                                 ui.close_menu();
                             }
-                            if ui.button("Reiniciar sesión").clicked() {
+                            if ui.button(tr("Reiniciar sesión", "Restart session")).clicked() {
                                 acts.push(Act::RestartBot(b.id.clone()));
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button("Eliminar bot").clicked() {
+                            if ui.button(tr("Eliminar bot", "Delete bot")).clicked() {
                                 acts.push(Act::DeleteBot(b.id.clone()));
                                 ui.close_menu();
                             }
@@ -1272,12 +1291,12 @@ impl App {
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("PROYECTOS").small().strong().color(DIM));
+                    ui.label(RichText::new(tr("PROYECTOS", "PROJECTS")).small().strong().color(DIM));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("+ grupo").clicked() {
+                        if ui.small_button(tr("+ grupo", "+ group")).clicked() {
                             self.new_group = Some(String::new());
                         }
-                        if ui.small_button("+ proyecto").clicked() {
+                        if ui.small_button(tr("+ proyecto", "+ project")).clicked() {
                             acts.push(Act::AddProject(0));
                         }
                     });
@@ -1285,9 +1304,9 @@ impl App {
                 let mut close_ng = false;
                 if let Some(buf) = &mut self.new_group {
                     ui.horizontal(|ui| {
-                        let r = ui.add(egui::TextEdit::singleline(buf).hint_text("Nombre del grupo").desired_width(150.0));
+                        let r = ui.add(egui::TextEdit::singleline(buf).hint_text(tr("Nombre del grupo", "Group name")).desired_width(150.0));
                         r.request_focus();
-                        if ui.small_button("Crear").clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                        if ui.small_button(tr("Crear", "Create")).clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
                             acts.push(Act::AddGroup(buf.clone()));
                             close_ng = true;
                         }
@@ -1309,11 +1328,11 @@ impl App {
                                 .sense(Sense::click()),
                         );
                         hr.context_menu(|ui| {
-                            if ui.button("Agregar proyecto aquí").clicked() {
+                            if ui.button(tr("Agregar proyecto aquí", "Add project here")).clicked() {
                                 acts.push(Act::AddProject(gi));
                                 ui.close_menu();
                             }
-                            if g.projects.is_empty() && ui.button("Eliminar grupo").clicked() {
+                            if g.projects.is_empty() && ui.button(tr("Eliminar grupo", "Delete group")).clicked() {
                                 acts.push(Act::DeleteGroup(gi));
                                 ui.close_menu();
                             }
@@ -1329,7 +1348,7 @@ impl App {
                                     acts.push(Act::SelectProject(p.path.clone()));
                                 }
                                 r.on_hover_text(&p.path).context_menu(|ui| {
-                                    ui.label(RichText::new("Cuenta Claude").small().color(MUTED));
+                                    ui.label(RichText::new(tr("Cuenta Claude", "Claude account")).small().color(MUTED));
                                     for a in &self.cfg.accounts {
                                         if ui.radio(p.account == a.name, format!("claude-{}", a.name)).clicked() {
                                             acts.push(Act::SetAccount(p.path.clone(), a.name.clone()));
@@ -1337,7 +1356,7 @@ impl App {
                                         }
                                     }
                                     ui.separator();
-                                    ui.label(RichText::new("Mover a grupo").small().color(MUTED));
+                                    ui.label(RichText::new(tr("Mover a grupo", "Move to group")).small().color(MUTED));
                                     for gj in 0..ngroups {
                                         if gj != gi && ui.button(&self.cfg.groups[gj].name).clicked() {
                                             acts.push(Act::MoveToGroup(p.path.clone(), gj));
@@ -1345,7 +1364,7 @@ impl App {
                                         }
                                     }
                                     ui.separator();
-                                    if ui.button("Quitar de tonycode").clicked() {
+                                    if ui.button(tr("Quitar de tonycode", "Remove from tonycode")).clicked() {
                                         acts.push(Act::RemoveProject(p.path.clone()));
                                         ui.close_menu();
                                     }
@@ -1387,20 +1406,20 @@ impl App {
                                                 acts.push(Act::SelectChat(c.id.clone()));
                                             }
                                             r.context_menu(|ui| {
-                                                if ui.button("Renombrar").clicked() {
+                                                if ui.button(tr("Renombrar", "Rename")).clicked() {
                                                     self.rename = Some((c.id.clone(), c.name.clone()));
                                                     ui.close_menu();
                                                 }
-                                                if ui.button("Reiniciar sesión").clicked() {
+                                                if ui.button(tr("Reiniciar sesión", "Restart session")).clicked() {
                                                     acts.push(Act::Restart(c.id.clone()));
                                                     ui.close_menu();
                                                 }
-                                                if ui.button("Detener").clicked() {
+                                                if ui.button(tr("Detener", "Stop")).clicked() {
                                                     acts.push(Act::Stop(c.id.clone()));
                                                     ui.close_menu();
                                                 }
                                                 ui.separator();
-                                                if ui.button("Eliminar chat").clicked() {
+                                                if ui.button(tr("Eliminar chat", "Delete chat")).clicked() {
                                                     acts.push(Act::DeleteChat(c.id.clone()));
                                                     ui.close_menu();
                                                 }
@@ -1423,7 +1442,7 @@ impl App {
                                             }
                                         }
                                     }
-                                    if ui.add(egui::Button::new(RichText::new("+ Nuevo chat").small().color(MUTED)).frame(false)).clicked() {
+                                    if ui.add(egui::Button::new(RichText::new(tr("+ Nuevo chat", "+ New chat")).small().color(MUTED)).frame(false)).clicked() {
                                         acts.push(Act::NewChat(p.path.clone()));
                                     }
                                 });
@@ -1433,7 +1452,7 @@ impl App {
                         ui.add_space(10.0);
                     }
                     if self.cfg.groups.iter().all(|g| g.projects.is_empty()) {
-                        ui.label(RichText::new("Agrega tu primer proyecto con + proyecto").small().color(DIM));
+                        ui.label(RichText::new(tr("Agrega tu primer proyecto con + proyecto", "Add your first project with + project")).small().color(DIM));
                     }
                 });
             });
@@ -1447,7 +1466,7 @@ impl App {
             }
             let Some(cid) = self.chat.clone() else {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("Elige un proyecto o agrega uno con + proyecto\nCmd+K para buscar · Cmd+T nuevo chat").color(DIM));
+                    ui.label(RichText::new(tr("Elige un proyecto o agrega uno con + proyecto\nCmd+K para buscar · Cmd+T nuevo chat", "Pick a project or add one with + project\nCmd+K to search · Cmd+T new chat")).color(DIM));
                 });
                 return;
             };
@@ -1461,43 +1480,43 @@ impl App {
                     dot(ui, st_color(st, review));
                     ui.label(RichText::new(&c.name).strong().color(TEXT));
                     if let Some(b) = &c.branch {
-                        ui.label(RichText::new(b).small().monospace().color(MUTED)).on_hover_text("Worktree propio");
+                        ui.label(RichText::new(b).small().monospace().color(MUTED)).on_hover_text(tr("Worktree propio", "Own worktree"));
                     }
                     if let Some(bn) = c.bot.as_ref().and_then(|b| self.cfg.bot(b)).map(|b| b.name.clone()) {
-                        ui.label(RichText::new(format!("delegado por {bn}")).small().color(OTHER));
+                        ui.label(RichText::new(trf!("delegado por {bn}", "delegated by {bn}")).small().color(OTHER));
                     }
                     ui.label(RichText::new(format!("↺ {}", &c.session_id[..8])).small().color(DIM))
-                        .on_hover_text(format!("Sesión {}\nSe retoma con claude --resume", c.session_id));
+                        .on_hover_text(trf!("Sesión {}\nSe retoma con claude --resume", "Session {}\nResumed with claude --resume", c.session_id));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("+ Chat").on_hover_text("Cmd+T").clicked() {
                             acts.push(Act::NewChat(p.path.clone()));
                         }
                         ui.checkbox(&mut self.new_wt, RichText::new("worktree").small())
-                            .on_hover_text("El chat nuevo trabaja en su propia rama y carpeta");
+                            .on_hover_text(tr("El chat nuevo trabaja en su propia rama y carpeta", "The new chat works in its own branch and folder"));
                         ui.separator();
                         for a in self.cfg.accounts.iter().rev() {
                             let on = p.account == a.name;
                             let t = RichText::new(&a.name).small();
                             let t = if on { t.color(acct_color(&a.name)).strong() } else { t.color(MUTED) };
-                            if ui.selectable_label(on, t).on_hover_text("Cuenta con la que arranca este proyecto").clicked() {
+                            if ui.selectable_label(on, t).on_hover_text(tr("Cuenta con la que arranca este proyecto", "Account this project starts with")).clicked() {
                                 acts.push(Act::SetAccount(p.path.clone(), a.name.clone()));
                             }
                         }
                         ui.separator();
-                        if ui.selectable_label(self.diff_open, "Cambios").clicked() {
+                        if ui.selectable_label(self.diff_open, tr("Cambios", "Changes")).clicked() {
                             self.diff_open = !self.diff_open;
                             if self.diff_open {
                                 self.files = false;
                                 acts.push(Act::RefreshDiff);
                             }
                         }
-                        if ui.selectable_label(self.files, "Archivos").clicked() {
+                        if ui.selectable_label(self.files, tr("Archivos", "Files")).clicked() {
                             self.files = !self.files;
                             if self.files {
                                 self.diff_open = false;
                             }
                         }
-                        if ui.button("↻").on_hover_text("Reiniciar sesión").clicked() {
+                        if ui.button("↻").on_hover_text(tr("Reiniciar sesión", "Restart session")).clicked() {
                             acts.push(Act::Restart(cid.clone()));
                         }
                     });
@@ -1513,7 +1532,7 @@ impl App {
                             let ag = &rt.tracker.agents;
                             for a in ag.iter().skip(ag.len().saturating_sub(8)) {
                                 let col = if a.done { OK } else { RUN };
-                                let txt = format!("{}  {}  {}", a.kind, a.desc, if a.done { "listo" } else { "corriendo" });
+                                let txt = format!("{}  {}  {}", a.kind, a.desc, if a.done { tr("listo", "done") } else { tr("corriendo", "running") });
                                 Frame::new()
                                     .fill(PANEL)
                                     .stroke(egui::Stroke::new(1.0_f32, LINE))
@@ -1571,15 +1590,15 @@ impl App {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| {
                     let msg = match (&rt.err, rt.st()) {
-                        (Some(e), _) => format!("No se pudo iniciar Claude:\n{e}"),
-                        (None, St::Exited) => "La sesión de Claude terminó.".into(),
-                        _ => "Sesión detenida.".into(),
+                        (Some(e), _) => trf!("No se pudo iniciar Claude:\n{e}", "Could not start Claude:\n{e}"),
+                        (None, St::Exited) => tr("La sesión de Claude terminó.", "The Claude session ended.").into(),
+                        _ => tr("Sesión detenida.", "Session stopped.").into(),
                     };
                     ui.label(RichText::new(msg).color(MUTED));
                     ui.add_space(8.0);
                     ui.label(RichText::new(config::short(cwd)).small().monospace().color(DIM));
                     ui.add_space(12.0);
-                    if ui.button("Iniciar sesión de Claude").clicked() {
+                    if ui.button(tr("Iniciar sesión de Claude", "Start Claude session")).clicked() {
                         acts.push(if is_bot { Act::RestartBot(key.to_string()) } else { Act::Restart(key.to_string()) });
                     }
                 });
@@ -1610,13 +1629,13 @@ impl App {
                 dot(ui, st_color(st, review));
                 ui.label(RichText::new(&bot.name).strong().color(TEXT));
                 ui.label(RichText::new("lead bot").small().color(OTHER));
-                let scope = if bot.projects.is_empty() { "todos los proyectos".to_string() } else { format!("{} proyectos", bot.projects.len()) };
-                ui.label(RichText::new(format!("{} tareas · {scope}", tasks.len())).small().color(DIM));
+                let scope = if bot.projects.is_empty() { tr("todos los proyectos", "all projects").to_string() } else { trf!("{} proyectos", "{} projects", bot.projects.len()) };
+                ui.label(RichText::new(trf!("{} tareas · {scope}", "{} tasks · {scope}", tasks.len())).small().color(DIM));
                 if bot.allow_approve {
-                    ui.label(RichText::new("puede aprobar permisos").small().color(RUN));
+                    ui.label(RichText::new(tr("puede aprobar permisos", "can approve permissions")).small().color(RUN));
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("↻").on_hover_text("Reiniciar sesión del bot").clicked() {
+                    if ui.button("↻").on_hover_text(tr("Reiniciar sesión del bot", "Restart bot session")).clicked() {
                         acts.push(Act::RestartBot(bot.id.clone()));
                     }
                     ui.separator();
@@ -1624,7 +1643,7 @@ impl App {
                         let on = bot.account == a.name;
                         let t = RichText::new(&a.name).small();
                         let t = if on { t.color(acct_color(&a.name)).strong() } else { t.color(MUTED) };
-                        if ui.selectable_label(on, t).on_hover_text("Cuenta de Claude con la que trabaja el bot").clicked() {
+                        if ui.selectable_label(on, t).on_hover_text(tr("Cuenta de Claude con la que trabaja el bot", "Claude account the bot works with")).clicked() {
                             acts.push(Act::SetBotAccount(bot.id.clone(), a.name.clone()));
                         }
                     }
@@ -1634,7 +1653,7 @@ impl App {
         if !tasks.is_empty() {
             Frame::new().inner_margin(Margin::symmetric(12, 6)).fill(term::BG).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("TAREAS").small().strong().color(DIM));
+                    ui.label(RichText::new(tr("TAREAS", "TASKS")).small().strong().color(DIM));
                     for (id, proj, title, st, review) in &tasks {
                         Frame::new()
                             .fill(PANEL)
@@ -1645,7 +1664,7 @@ impl App {
                                 ui.horizontal(|ui| {
                                     dot(ui, st_color(*st, *review));
                                     let b = egui::Button::new(RichText::new(format!("{proj} · {title}")).small().color(TEXT)).frame(false);
-                                    if ui.add(b).on_hover_text(format!("Abrir tarea {}", &id[..8])).clicked() {
+                                    if ui.add(b).on_hover_text(trf!("Abrir tarea {}", "Open task {}", &id[..8])).clicked() {
                                         acts.push(Act::SelectChat(id.clone()));
                                     }
                                 });
@@ -1680,7 +1699,7 @@ impl App {
             .frame(Frame::new().inner_margin(Margin::same(8)))
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Archivos").strong());
+                    ui.label(RichText::new(tr("Archivos", "Files")).strong());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button("x").clicked() {
                             self.files = false;
@@ -1727,13 +1746,13 @@ impl App {
                     let rel = ed.path.strip_prefix(root).map(|r| r.display().to_string()).unwrap_or(ed.path.display().to_string());
                     ui.label(RichText::new(rel).small().monospace());
                     if ed.dirty {
-                        ui.label(RichText::new("● sin guardar").small().color(RUN));
+                        ui.label(RichText::new(tr("● sin guardar", "● unsaved")).small().color(RUN));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add_enabled(ed.dirty, egui::Button::new("Guardar")).on_hover_text("Cmd+S").clicked() {
+                        if ui.add_enabled(ed.dirty, egui::Button::new(tr("Guardar", "Save"))).on_hover_text("Cmd+S").clicked() {
                             save = true;
                         }
-                        if ed.dirty && ui.small_button("Descartar").clicked() {
+                        if ed.dirty && ui.small_button(tr("Descartar", "Discard")).clicked() {
                             discard = true;
                         }
                     });
@@ -1753,7 +1772,7 @@ impl App {
                 });
             } else {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("Elige un archivo para editarlo").color(DIM));
+                    ui.label(RichText::new(tr("Elige un archivo para editarlo", "Pick a file to edit")).color(DIM));
                 });
             }
             if save {
@@ -1768,9 +1787,9 @@ impl App {
     fn diff_ui(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         ui.set_min_size(ui.available_size());
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Cambios").strong());
+            ui.label(RichText::new(tr("Cambios", "Changes")).strong());
             let n = self.diff.as_ref().map(|d| d.status.len()).unwrap_or(0);
-            ui.label(RichText::new(format!("{n} archivos")).small().color(MUTED));
+            ui.label(RichText::new(trf!("{n} archivos", "{n} files")).small().color(MUTED));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.small_button("x").clicked() {
                     self.diff_open = false;
@@ -1783,11 +1802,11 @@ impl App {
         ui.add_space(6.0);
         let has = self.diff.as_ref().map(|d| !d.status.is_empty()).unwrap_or(false);
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.commit_msg).hint_text("Mensaje del commit").desired_width(ui.available_width() - 170.0));
+            ui.add(egui::TextEdit::singleline(&mut self.commit_msg).hint_text(tr("Mensaje del commit", "Commit message")).desired_width(ui.available_width() - 170.0));
             if ui.add_enabled(has && !self.commit_msg.trim().is_empty(), egui::Button::new("Commit")).clicked() {
                 acts.push(Act::Commit);
             }
-            if ui.add_enabled(has, egui::Button::new("Revertir")).clicked() {
+            if ui.add_enabled(has, egui::Button::new(tr("Revertir", "Revert"))).clicked() {
                 self.confirm_revert = true;
             }
         });
@@ -1802,7 +1821,7 @@ impl App {
                     ui.label(RichText::new(l).monospace().size(12.0).color(*c));
                 }
                 if d.status.is_empty() {
-                    ui.label(RichText::new("Sin cambios pendientes.").color(DIM));
+                    ui.label(RichText::new(tr("Sin cambios pendientes.", "No pending changes.")).color(DIM));
                 }
             });
         }
@@ -1814,12 +1833,12 @@ impl App {
         if let Some(nb) = &mut self.new_bot {
             let m = egui::Modal::new(egui::Id::new("new_bot")).show(ctx, |ui| {
                 ui.set_width(460.0);
-                ui.label(RichText::new("Nuevo bot líder").strong().size(16.0));
+                ui.label(RichText::new(tr("Nuevo bot líder", "New lead bot")).strong().size(16.0));
                 ui.add_space(6.0);
-                ui.label(RichText::new("Nombre").small().color(MUTED));
+                ui.label(RichText::new(tr("Nombre", "Name")).small().color(MUTED));
                 ui.add(egui::TextEdit::singleline(&mut nb.name).hint_text("Aceable Bot").desired_width(f32::INFINITY));
                 ui.add_space(6.0);
-                ui.label(RichText::new("Cuenta de Claude con la que trabaja").small().color(MUTED));
+                ui.label(RichText::new(tr("Cuenta de Claude con la que trabaja", "Claude account it works with")).small().color(MUTED));
                 ui.horizontal(|ui| {
                     for a in &self.cfg.accounts {
                         let t = RichText::new(format!("claude-{}", a.name)).color(acct_color(&a.name));
@@ -1829,7 +1848,7 @@ impl App {
                     }
                 });
                 ui.add_space(6.0);
-                ui.label(RichText::new("Proyectos a los que puede delegar (ninguno marcado = todos)").small().color(MUTED));
+                ui.label(RichText::new(tr("Proyectos a los que puede delegar (ninguno marcado = todos)", "Projects it can delegate to (none checked = all)")).small().color(MUTED));
                 egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                     for g in &self.cfg.groups {
                         if g.projects.is_empty() {
@@ -1849,17 +1868,17 @@ impl App {
                     }
                 });
                 ui.add_space(6.0);
-                ui.checkbox(&mut nb.worktree, "Cada tarea en su propio worktree (rama aparte)");
-                ui.checkbox(&mut nb.approve, "Puede responder prompts de permiso");
+                ui.checkbox(&mut nb.worktree, tr("Cada tarea en su propio worktree (rama aparte)", "Each task in its own worktree (separate branch)"));
+                ui.checkbox(&mut nb.approve, tr("Puede responder prompts de permiso", "Can answer permission prompts"));
                 if nb.approve {
-                    ui.label(RichText::new("El bot podrá aceptar comandos en las tareas sin pasar por ti. Sus instrucciones le prohíben aprobar push, merge, deploy o borrados, pero es tu decisión.").small().color(RUN));
+                    ui.label(RichText::new(tr("El bot podrá aceptar comandos en las tareas sin pasar por ti. Sus instrucciones le prohíben aprobar push, merge, deploy o borrados, pero es tu decisión.", "The bot will be able to accept commands in its tasks without going through you. Its instructions forbid approving push, merge, deploy or deletions, but it's your call.")).small().color(RUN));
                 }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Crear bot").strong()).clicked() {
+                    if ui.button(RichText::new(tr("Crear bot", "Create bot")).strong()).clicked() {
                         nb_create = true;
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(tr("Cancelar", "Cancel")).clicked() {
                         nb_cancel = true;
                     }
                 });
@@ -1880,7 +1899,7 @@ impl App {
             for g in &self.cfg.groups {
                 for p in &g.projects {
                     if p.name.to_lowercase().contains(&q) {
-                        res.push((format!("PROYECTO   {}", p.name), g.name.clone(), Act::SelectProject(p.path.clone())));
+                        res.push((trf!("PROYECTO   {}", "PROJECT   {}", p.name), g.name.clone(), Act::SelectProject(p.path.clone())));
                     }
                     for c in &p.chats {
                         if !q.is_empty() && c.name.to_lowercase().contains(&q) {
@@ -1893,7 +1912,7 @@ impl App {
             let mut pick: Option<usize> = None;
             let m = egui::Modal::new(egui::Id::new("palette")).show(ctx, |ui| {
                 ui.set_width(520.0);
-                let r = ui.add(egui::TextEdit::singleline(&mut self.pal_q).hint_text("Proyecto o chat...").desired_width(f32::INFINITY));
+                let r = ui.add(egui::TextEdit::singleline(&mut self.pal_q).hint_text(tr("Proyecto o chat...", "Project or chat...")).desired_width(f32::INFINITY));
                 if self.pal_focus {
                     r.request_focus();
                     self.pal_focus = false;
@@ -1913,7 +1932,7 @@ impl App {
                     });
                 }
                 if res.is_empty() {
-                    ui.label(RichText::new("Sin resultados").color(DIM));
+                    ui.label(RichText::new(tr("Sin resultados", "No results")).color(DIM));
                 }
             });
             if let Some(i) = pick {
@@ -1928,15 +1947,15 @@ impl App {
         if let Some((id, buf)) = &mut self.rename {
             let m = egui::Modal::new(egui::Id::new("rename")).show(ctx, |ui| {
                 ui.set_width(320.0);
-                ui.label("Nombre del chat");
+                ui.label(tr("Nombre del chat", "Chat name"));
                 let r = ui.add(egui::TextEdit::singleline(buf).desired_width(f32::INFINITY));
                 r.request_focus();
                 ui.horizontal(|ui| {
-                    if ui.button("Guardar").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+                    if ui.button(tr("Guardar", "Save")).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
                         acts.push(Act::Rename(id.clone(), buf.trim().to_string()));
                         close_rename = true;
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(tr("Cancelar", "Cancel")).clicked() {
                         close_rename = true;
                     }
                 });
@@ -1953,15 +1972,15 @@ impl App {
         if self.confirm_revert {
             let m = egui::Modal::new(egui::Id::new("revert")).show(ctx, |ui| {
                 ui.set_width(380.0);
-                ui.label(RichText::new("¿Revertir todos los cambios de este chat?").strong());
-                ui.label(RichText::new("Se descartan los cambios en archivos con seguimiento. No se puede deshacer.").small().color(MUTED));
+                ui.label(RichText::new(tr("¿Revertir todos los cambios de este chat?", "Revert all changes in this chat?")).strong());
+                ui.label(RichText::new(tr("Se descartan los cambios en archivos con seguimiento. No se puede deshacer.", "Changes to tracked files are discarded. This cannot be undone.")).small().color(MUTED));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Revertir").color(NEED)).clicked() {
+                    if ui.button(RichText::new(tr("Revertir", "Revert")).color(NEED)).clicked() {
                         acts.push(Act::Revert);
                         self.confirm_revert = false;
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(tr("Cancelar", "Cancel")).clicked() {
                         self.confirm_revert = false;
                     }
                 });
@@ -1976,7 +1995,7 @@ impl App {
             let upd = self.upd.lock().map(|u| u.clone()).unwrap_or_default();
             let mut start = false;
             let mut restart = false;
-            egui::Window::new("Actualizar tonycode")
+            egui::Window::new(tr("Actualizar tonycode", "Update tonycode"))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
@@ -1984,7 +2003,7 @@ impl App {
                 .show(ctx, |ui| {
                     ui.set_width(780.0);
                     if let Upd::Available(commits) = &upd {
-                        ui.label(RichText::new(format!("{} commits nuevos en el repo:", commits.len())).color(MUTED));
+                        ui.label(RichText::new(trf!("{} commits nuevos en el repo:", "{} new commits in the repo:", commits.len())).color(MUTED));
                         for c in commits.iter().take(12) {
                             ui.label(RichText::new(c).small().monospace());
                         }
@@ -1992,9 +2011,9 @@ impl App {
                     ui.add_space(8.0);
                     match &mut self.upd_term {
                         None => {
-                            ui.label(RichText::new("Se hará git pull, se compilará y se reinstalará la app. Tus chats se retoman solos con --resume al volver a abrir.").small().color(DIM));
+                            ui.label(RichText::new(tr("Se hará git pull, se compilará y se reinstalará la app. Tus chats se retoman solos con --resume al volver a abrir.", "It will git pull, build and reinstall the app. Your chats resume automatically with --resume when it reopens.")).small().color(DIM));
                             ui.add_space(6.0);
-                            if ui.button(RichText::new("Actualizar ahora").strong()).clicked() {
+                            if ui.button(RichText::new(tr("Actualizar ahora", "Update now")).strong()).clicked() {
                                 start = true;
                             }
                         }
@@ -2007,22 +2026,22 @@ impl App {
                             });
                             ui.add_space(6.0);
                             if alive {
-                                ui.label(RichText::new("Actualizando... (la compilación tarda un par de minutos)").small().color(RUN));
+                                ui.label(RichText::new(tr("Actualizando... (la compilación tarda un par de minutos)", "Updating... (the build takes a couple of minutes)")).small().color(RUN));
                             } else if ok {
                                 let live = self.rt.values().filter(|r| r.term.as_ref().map(|t| t.is_alive()).unwrap_or(false)).count();
                                 if live == 0 {
-                                    ui.label(RichText::new("Listo. Reiniciando...").color(OK));
+                                    ui.label(RichText::new(tr("Listo. Reiniciando...", "Done. Restarting...")).color(OK));
                                     restart = true;
                                 } else {
                                     ui.label(
-                                        RichText::new(format!("Listo. Tienes {live} sesiones abiertas: se retoman solas al reiniciar.")).color(OK),
+                                        RichText::new(trf!("Listo. Tienes {live} sesiones abiertas: se retoman solas al reiniciar.", "Done. You have {live} open sessions: they resume on restart.")).color(OK),
                                     );
-                                    if ui.button(RichText::new("Reiniciar tonycode").strong()).clicked() {
+                                    if ui.button(RichText::new(tr("Reiniciar tonycode", "Restart tonycode")).strong()).clicked() {
                                         restart = true;
                                     }
                                 }
                             } else {
-                                ui.label(RichText::new("La actualización falló. Revisa la salida de arriba.").color(NEED));
+                                ui.label(RichText::new(tr("La actualización falló. Revisa la salida de arriba.", "The update failed. Check the output above.")).color(NEED));
                             }
                         }
                     }
@@ -2046,7 +2065,7 @@ impl App {
         if self.gh_open {
             let mut open = true;
             let cur = self.current_gh();
-            egui::Window::new("Cuenta de GitHub activa")
+            egui::Window::new(tr("Cuenta de GitHub activa", "Active GitHub account"))
                 .anchor(Align2::RIGHT_BOTTOM, [-12.0, -34.0])
                 .collapsible(false)
                 .resizable(false)
@@ -2054,7 +2073,7 @@ impl App {
                 .show(ctx, |ui| {
                     ui.set_width(380.0);
                     if self.gh_hosts.is_empty() {
-                        ui.label(RichText::new("No encontré hosts de GitHub en ~/.ssh/config").color(MUTED));
+                        ui.label(RichText::new(tr("No encontré hosts de GitHub en ~/.ssh/config", "No GitHub hosts found in ~/.ssh/config")).color(MUTED));
                     }
                     for h in &self.gh_hosts {
                         let on = cur.as_deref() == Some(h.alias.as_str());
@@ -2070,13 +2089,13 @@ impl App {
                     let proj = self.project.as_ref().and_then(|p| self.cfg.project(p)).map(|p| p.name.clone());
                     ui.label(
                         RichText::new(match proj {
-                            Some(n) => format!("Al elegir, se aplica git config core.sshCommand en {n}"),
-                            None => "Elige un proyecto para aplicarla en su repo".into(),
+                            Some(n) => trf!("Al elegir, se aplica git config core.sshCommand en {n}", "Choosing one sets git config core.sshCommand in {n}"),
+                            None => tr("Elige un proyecto para aplicarla en su repo", "Pick a project to apply it to its repo").into(),
                         })
                         .small()
                         .color(MUTED),
                     );
-                    if ui.small_button("↻ Releer ~/.ssh/config").clicked() {
+                    if ui.small_button(tr("↻ Releer ~/.ssh/config", "↻ Reload ~/.ssh/config")).clicked() {
                         self.gh_hosts = ssh::github_hosts();
                     }
                 });

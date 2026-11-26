@@ -63,6 +63,10 @@ Flujo: haz cambios donde quieras, `git push` a master, y la app se actualiza sol
 
 El teclado va a la terminal siempre que no estés escribiendo en un campo de texto.
 
+## Idioma
+
+Español o inglés desde **tonycode ▾ → Idioma / Language**. Cambia al instante y se guarda. También traduce el comando `./tc` y las instrucciones del bot líder (en inglés el bot trabaja y responde en inglés; reinícialo para que tome el cambio).
+
 ## Configuración
 
 Todo vive en `~/.tonycode/tonycode.toml` (se guarda solo). Opciones útiles:
@@ -71,6 +75,7 @@ Todo vive en `~/.tonycode/tonycode.toml` (se guarda solo). Opciones útiles:
 claude_cmd = "claude"     # ruta o nombre del binario
 login_shell = true        # lanza claude vía tu shell (-lic) para heredar PATH de nvm/bun
 notify = true             # notificaciones de macOS
+lang = "es"               # "es" o "en"
 
 [[accounts]]              # agrega más cuentas Claude si quieres
 name = "work"

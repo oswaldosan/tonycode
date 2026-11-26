@@ -1,5 +1,6 @@
 //! Revisa si hay commits nuevos en el repo de tonycode y permite actualizar con un clic.
 
+use crate::trf;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -44,7 +45,7 @@ pub fn check() -> Upd {
         return Upd::NoRepo;
     }
     if let Err(e) = git(&dir, &["fetch", "--quiet"]) {
-        return Upd::Error(format!("git fetch falló: {e}"));
+        return Upd::Error(trf!("git fetch falló: {e}", "git fetch failed: {e}"));
     }
     let base = if BUILT_COMMIT.is_empty() { "HEAD".to_string() } else { BUILT_COMMIT.to_string() };
     match git(&dir, &["log", "--oneline", "--no-decorate", &format!("{base}..@{{u}}")]) {

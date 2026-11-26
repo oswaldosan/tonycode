@@ -92,6 +92,9 @@ pub struct Config {
     pub notify: bool,
     #[serde(default = "d_work")]
     pub default_account: String,
+    /// "es" o "en"
+    #[serde(default = "d_lang")]
+    pub lang: String,
     #[serde(default)]
     pub gh_active: Option<String>,
     #[serde(default)]
@@ -111,6 +114,9 @@ fn d_claude() -> String {
 }
 fn d_true() -> bool {
     true
+}
+fn d_lang() -> String {
+    "es".into()
 }
 fn d_work() -> String {
     "work".into()
@@ -176,6 +182,7 @@ impl Config {
             login_shell: true,
             notify: true,
             default_account: d_work(),
+            lang: d_lang(),
             gh_active: None,
             last_chat: None,
             accounts: d_accounts(),
