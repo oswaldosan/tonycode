@@ -175,6 +175,9 @@ pub struct App {
     upd: Arc<Mutex<Upd>>,
     upd_open: bool,
     upd_term: Option<Term>,
+    /// Búsqueda manual en curso: al terminar, si hay cambios se actualiza solo.
+    upd_checking: Arc<std::sync::atomic::AtomicBool>,
+    upd_auto: bool,
 }
 
 impl App {
@@ -219,6 +222,8 @@ impl App {
             upd: Arc::new(Mutex::new(Upd::Unknown)),
             upd_open: false,
             upd_term: None,
+            upd_checking: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            upd_auto: false,
         };
         updater::spawn_checker(app.upd.clone(), cc.egui_ctx.clone());
         if let Some(id) = last {
@@ -616,6 +621,57 @@ impl App {
         self.term_input = taken;
     }
 
+    /// Busca actualizaciones ahora. Con `auto`, si hay cambios hace pull + install solo.
+    fn check_updates(&mut self, ctx: &egui::Context, auto: bool) {
+        use std::sync::atomic::Ordering;
+        if self.upd_checking.load(Ordering::SeqCst) || self.upd_term.as_ref().map(|t| t.is_alive()).unwrap_or(false) {
+            return;
+        }
+        self.upd_checking.store(true, Ordering::SeqCst);
+        self.upd_auto = auto;
+        let st = self.upd.clone();
+        let flag = self.upd_checking.clone();
+        let c2 = ctx.clone();
+        std::thread::spawn(move || {
+            let r = updater::check();
+            if let Ok(mut s) = st.lock() {
+                *s = r;
+            }
+            flag.store(false, Ordering::SeqCst);
+            c2.request_repaint();
+        });
+        self.toast("Buscando actualizaciones...");
+    }
+
+    fn start_update(&mut self, ctx: &egui::Context) {
+        let (prog, args) = updater::update_command();
+        match Term::spawn(&prog, &args, &updater::source_dir(), &[], ctx.clone()) {
+            Ok(t) => {
+                self.upd_term = Some(t);
+                self.upd_open = true;
+            }
+            Err(e) => self.toast(format!("No se pudo iniciar la actualización: {e}")),
+        }
+    }
+
+    /// Cuando termina una búsqueda manual, decide qué hacer.
+    fn after_check(&mut self, ctx: &egui::Context) {
+        use std::sync::atomic::Ordering;
+        if !self.upd_auto || self.upd_checking.load(Ordering::SeqCst) {
+            return;
+        }
+        self.upd_auto = false;
+        let upd = self.upd.lock().map(|u| u.clone()).unwrap_or_default();
+        match upd {
+            Upd::Available(_) => self.start_update(ctx),
+            Upd::UpToDate => self.toast(format!("Ya tienes la última versión ({})", updater::short_commit())),
+            Upd::NoRepo => self.toast("Esta instalación no viene de un clon git: clona el repo en ~/tonycode y corre install.sh"),
+            Upd::Error(e) => self.toast(format!("No se pudo buscar actualizaciones: {e}")),
+            Upd::Unknown => {}
+        }
+    }
+
+
     fn shortcuts(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
             self.pal = !self.pal;
@@ -983,7 +1039,19 @@ impl App {
             .frame(Frame::new().fill(PANEL).inner_margin(Margin::symmetric(12, 6)).stroke(egui::Stroke::new(1.0_f32, LINE)))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.label(RichText::new("tonycode").strong().color(TEXT));
+                    ui.menu_button(RichText::new("tonycode ▾").strong().color(TEXT), |ui| {
+                        ui.set_min_width(220.0);
+                        let checking = self.upd_checking.load(std::sync::atomic::Ordering::SeqCst);
+                        let busy = checking || self.upd_term.as_ref().map(|t| t.is_alive()).unwrap_or(false);
+                        let label = if busy { "Actualizando..." } else { "Buscar actualización" };
+                        if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                            self.check_updates(ctx, true);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label(RichText::new(format!("Versión {} · {}", env!("CARGO_PKG_VERSION"), updater::short_commit())).small().color(DIM));
+                        ui.label(RichText::new(config::short(&updater::source_dir())).small().monospace().color(DIM));
+                    });
                     let crumb = match self.chat.as_ref().and_then(|id| self.cfg.find_chat(id)) {
                         Some((p, c)) => format!("{}  /  {}", p.name, c.name),
                         None => self.bot.as_ref().and_then(|b| self.cfg.bot(b)).map(|b| format!("Bot  /  {}", b.name)).unwrap_or_default(),
@@ -1076,17 +1144,8 @@ impl App {
                                 };
                                 let v = format!("v{} · {}", env!("CARGO_PKG_VERSION"), updater::short_commit());
                                 let r = ui.add(egui::Label::new(RichText::new(v).small().color(DIM)).sense(Sense::click()));
-                                if r.on_hover_text(format!("{tip}\nClic para buscar actualizaciones")).clicked() {
-                                    let st = self.upd.clone();
-                                    let c2 = ctx.clone();
-                                    std::thread::spawn(move || {
-                                        let r = updater::check();
-                                        if let Ok(mut s) = st.lock() {
-                                            *s = r;
-                                        }
-                                        c2.request_repaint();
-                                    });
-                                    self.toast("Buscando actualizaciones...");
+                                if r.on_hover_text(format!("{tip}\nClic para buscar y actualizar")).clicked() {
+                                    self.check_updates(ctx, true);
                                 }
                             }
                         }
@@ -1950,9 +2009,17 @@ impl App {
                             if alive {
                                 ui.label(RichText::new("Actualizando... (la compilación tarda un par de minutos)").small().color(RUN));
                             } else if ok {
-                                ui.label(RichText::new("Listo. Reinicia para usar la nueva versión.").color(OK));
-                                if ui.button(RichText::new("Reiniciar tonycode").strong()).clicked() {
+                                let live = self.rt.values().filter(|r| r.term.as_ref().map(|t| t.is_alive()).unwrap_or(false)).count();
+                                if live == 0 {
+                                    ui.label(RichText::new("Listo. Reiniciando...").color(OK));
                                     restart = true;
+                                } else {
+                                    ui.label(
+                                        RichText::new(format!("Listo. Tienes {live} sesiones abiertas: se retoman solas al reiniciar.")).color(OK),
+                                    );
+                                    if ui.button(RichText::new("Reiniciar tonycode").strong()).clicked() {
+                                        restart = true;
+                                    }
                                 }
                             } else {
                                 ui.label(RichText::new("La actualización falló. Revisa la salida de arriba.").color(NEED));
@@ -1961,11 +2028,7 @@ impl App {
                     }
                 });
             if start {
-                let (prog, args) = updater::update_command();
-                match Term::spawn(&prog, &args, &updater::source_dir(), &[], ctx.clone()) {
-                    Ok(t) => self.upd_term = Some(t),
-                    Err(e) => self.toast(format!("No se pudo iniciar la actualización: {e}")),
-                }
+                self.start_update(ctx);
             }
             if restart {
                 self.cfg.save();
@@ -2030,6 +2093,7 @@ impl eframe::App for App {
         self.shortcuts(ctx, &mut acts);
         self.grab_term_input(ctx);
         self.scan(ctx);
+        self.after_check(ctx);
         self.process_inbox(ctx);
         self.write_bot_status();
         self.top_bar(ctx, &mut acts);

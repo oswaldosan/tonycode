@@ -43,7 +43,7 @@ Un bot es una sesión de Claude que coordina tus proyectos. Le das tickets ("ten
 
 La app guarda el commit con el que se compiló y la carpeta del código. Al abrir y cada 30 minutos hace `git fetch` ahí. Si `master` en el remoto tiene commits nuevos, aparece **Actualización disponible (n)** en la barra de estado: un clic muestra los commits y **Actualizar ahora** hace `git pull`, compila, reinstala y te deja reiniciar.
 
-Para buscar al instante, haz clic en la versión (`v0.1.0 · abc1234`) en la barra de estado.
+Para buscar al instante usa el menú **tonycode ▾ → Buscar actualización** (arriba a la izquierda) o haz clic en la versión de la barra de estado. Si hay cambios, hace `git pull` e instala solo, y se reinicia sola si no tienes sesiones abiertas (si las hay, te pide confirmar; se retoman con --resume).
 
 Flujo: haz cambios donde quieras, `git push` a master, y la app se actualiza sola desde su carpeta de código.
 
