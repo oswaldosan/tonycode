@@ -63,6 +63,16 @@ Flujo: haz cambios donde quieras, `git push` a master, y la app se actualiza sol
 
 El teclado va a la terminal siempre que no estés escribiendo en un campo de texto.
 
+## Terminal
+
+En **tonycode ▾ → Terminal**:
+
+- **Tema:** tonycode, Dracula, Catppuccin Mocha (por defecto), Tokyo Night, One Dark, Nord, Gruvbox Dark, Solarized Dark.
+- **Fuente:** automática (usa la mejor instalada: MesloLGS NF de oh-my-zsh/powerlevel10k, JetBrains Mono Nerd Font, JetBrains Mono, SF Mono o Menlo) o la que elijas. Con negrita y cursiva reales.
+- **Tamaño** (también Cmd+ / Cmd−), **interlineado** y **cursor** (barra, bloque o subrayado).
+
+Los símbolos de Claude Code (logo, cajas, spinners, ⎿) se dibujan a mano para que siempre se vean alineados.
+
 ## Idioma
 
 Español o inglés desde **tonycode ▾ → Idioma / Language**. Cambia al instante y se guarda. También traduce el comando `./tc` y las instrucciones del bot líder (en inglés el bot trabaja y responde en inglés; reinícialo para que tome el cambio).
@@ -76,6 +86,11 @@ claude_cmd = "claude"     # ruta o nombre del binario
 login_shell = true        # lanza claude vía tu shell (-lic) para heredar PATH de nvm/bun
 notify = true             # notificaciones de macOS
 lang = "es"               # "es" o "en"
+term_theme = "Catppuccin Mocha"
+term_font = "auto"        # o "MesloLGS NF", "SF Mono", "Menlo"...
+term_size = 14.0
+term_line = 1.15
+term_cursor = "bar"       # bar | block | underline
 
 [[accounts]]              # agrega más cuentas Claude si quieres
 name = "work"

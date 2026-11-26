@@ -92,6 +92,17 @@ pub struct Config {
     pub notify: bool,
     #[serde(default = "d_work")]
     pub default_account: String,
+    /// Terminal: tema, fuente ("auto" o nombre), tamaño, interlineado y cursor (bar/block/underline)
+    #[serde(default = "d_theme")]
+    pub term_theme: String,
+    #[serde(default = "d_auto")]
+    pub term_font: String,
+    #[serde(default = "d_size")]
+    pub term_size: f32,
+    #[serde(default = "d_line")]
+    pub term_line: f32,
+    #[serde(default = "d_cursor")]
+    pub term_cursor: String,
     /// "es" o "en"
     #[serde(default = "d_lang")]
     pub lang: String,
@@ -114,6 +125,21 @@ fn d_claude() -> String {
 }
 fn d_true() -> bool {
     true
+}
+fn d_theme() -> String {
+    "Catppuccin Mocha".into()
+}
+fn d_auto() -> String {
+    "auto".into()
+}
+fn d_size() -> f32 {
+    14.0
+}
+fn d_line() -> f32 {
+    1.15
+}
+fn d_cursor() -> String {
+    "bar".into()
 }
 fn d_lang() -> String {
     "es".into()
@@ -183,6 +209,11 @@ impl Config {
             notify: true,
             default_account: d_work(),
             lang: d_lang(),
+            term_theme: d_theme(),
+            term_font: d_auto(),
+            term_size: d_size(),
+            term_line: d_line(),
+            term_cursor: d_cursor(),
             gh_active: None,
             last_chat: None,
             accounts: d_accounts(),

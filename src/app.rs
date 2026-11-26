@@ -5,7 +5,7 @@ use crate::trf;
 use crate::updater::{self, Upd};
 use crate::{bots, claude, git, ssh};
 use std::sync::{Arc, Mutex};
-use egui::{Align, Align2, Color32, FontId, Frame, Key, Layout, Margin, Modifiers, RichText, Sense, vec2};
+use egui::{Align, Align2, Color32, Frame, Key, Layout, Margin, Modifiers, RichText, Sense, vec2};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -127,6 +127,11 @@ enum Act {
     Commit,
     Revert,
     SetLang(String),
+    SetTheme(String),
+    SetFont(String),
+    SetTermSize(f32),
+    SetTermLine(f32),
+    SetCursor(String),
     SelectBot(String),
     CreateBot,
     SetBotAccount(String, String),
@@ -148,7 +153,8 @@ pub struct App {
     rt: HashMap<String, ChatRt>,
     project: Option<String>,
     chat: Option<String>,
-    font: FontId,
+    font_name: String,
+    fonts_avail: Vec<&'static str>,
     want_focus: bool,
     pal: bool,
     pal_q: String,
@@ -185,7 +191,9 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        setup_fonts(&cc.egui_ctx);
+        let cfg0 = Config::load();
+        let font_name = setup_fonts(&cc.egui_ctx, &cfg0.term_font);
+        term::set_theme(&cfg0.term_theme);
         setup_style(&cc.egui_ctx);
         let cfg = Config::load();
         crate::i18n::set_lang(&cfg.lang);
@@ -196,7 +204,8 @@ impl App {
             rt: HashMap::new(),
             project: None,
             chat: None,
-            font: FontId::monospace(13.0),
+            font_name,
+            fonts_avail: available_fonts(),
             want_focus: false,
             pal: false,
             pal_q: String::new(),
@@ -676,6 +685,18 @@ impl App {
     }
 
 
+    fn term_style(&self) -> term::Style {
+        term::Style {
+            size: self.cfg.term_size.clamp(9.0, 24.0),
+            line: self.cfg.term_line.clamp(1.0, 1.6),
+            cursor: match self.cfg.term_cursor.as_str() {
+                "block" => term::CursorKind::Block,
+                "underline" => term::CursorKind::Underline,
+                _ => term::CursorKind::Bar,
+            },
+        }
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
             self.pal = !self.pal;
@@ -687,6 +708,12 @@ impl App {
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) {
             self.save_editor();
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Equals) || i.consume_key(Modifiers::COMMAND, Key::Plus)) {
+            acts.push(Act::SetTermSize(self.cfg.term_size + 1.0));
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Minus)) {
+            acts.push(Act::SetTermSize(self.cfg.term_size - 1.0));
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::T)) {
             if let Some(p) = self.project.clone() {
@@ -962,6 +989,28 @@ impl App {
                 }
                 self.apply(Act::RefreshDiff, ctx);
             }
+            Act::SetTheme(t) => {
+                term::set_theme(&t);
+                self.cfg.term_theme = t;
+                self.cfg.save();
+            }
+            Act::SetFont(f) => {
+                self.font_name = setup_fonts(ctx, &f);
+                self.cfg.term_font = f;
+                self.cfg.save();
+            }
+            Act::SetTermSize(v) => {
+                self.cfg.term_size = v.clamp(9.0, 24.0);
+                self.cfg.save();
+            }
+            Act::SetTermLine(v) => {
+                self.cfg.term_line = v.clamp(1.0, 1.6);
+                self.cfg.save();
+            }
+            Act::SetCursor(c) => {
+                self.cfg.term_cursor = c;
+                self.cfg.save();
+            }
             Act::SetLang(l) => {
                 crate::i18n::set_lang(&l);
                 self.cfg.lang = l;
@@ -1057,6 +1106,62 @@ impl App {
                             self.check_updates(ctx, true);
                             ui.close_menu();
                         }
+                        ui.separator();
+                        ui.menu_button(tr("Terminal", "Terminal"), |ui| {
+                            ui.set_min_width(240.0);
+                            ui.label(RichText::new(tr("Tema", "Theme")).small().color(MUTED));
+                            for t in term::THEMES {
+                                let on = self.cfg.term_theme == t.name;
+                                ui.horizontal(|ui| {
+                                    let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                                    ui.painter().rect_filled(r, 3.0, Color32::from_rgb((t.bg >> 16) as u8, (t.bg >> 8) as u8, t.bg as u8));
+                                    for (i, c) in [t.ansi[1], t.ansi[2], t.ansi[4]].iter().enumerate() {
+                                        let cr = egui::Rect::from_min_size(r.min + vec2(2.0 + i as f32 * 4.0, 5.0), vec2(3.0, 4.0));
+                                        ui.painter().rect_filled(cr, 0.0, Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8));
+                                    }
+                                    if ui.selectable_label(on, t.name).clicked() {
+                                        acts.push(Act::SetTheme(t.name.to_string()));
+                                    }
+                                });
+                            }
+                            ui.separator();
+                            ui.label(RichText::new(trf!("Fuente: {}", "Font: {}", self.font_name)).small().color(MUTED));
+                            if ui.selectable_label(self.cfg.term_font == "auto", tr("Automática (la mejor instalada)", "Automatic (best installed)")).clicked() {
+                                acts.push(Act::SetFont("auto".into()));
+                            }
+                            for f in self.fonts_avail.clone() {
+                                if ui.selectable_label(self.cfg.term_font == f, f).clicked() {
+                                    acts.push(Act::SetFont(f.to_string()));
+                                }
+                            }
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(tr("Tamaño", "Size")).small().color(MUTED));
+                                if ui.small_button("−").clicked() {
+                                    acts.push(Act::SetTermSize(self.cfg.term_size - 1.0));
+                                }
+                                ui.label(format!("{:.0}", self.cfg.term_size));
+                                if ui.small_button("+").clicked() {
+                                    acts.push(Act::SetTermSize(self.cfg.term_size + 1.0));
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(tr("Interlineado", "Line height")).small().color(MUTED));
+                                for (v, l) in [(1.0_f32, "1.0"), (1.15, "1.15"), (1.3, "1.3")] {
+                                    if ui.selectable_label((self.cfg.term_line - v).abs() < 0.01, l).clicked() {
+                                        acts.push(Act::SetTermLine(v));
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(tr("Cursor", "Cursor")).small().color(MUTED));
+                                for (k, l) in [("bar", tr("Barra", "Bar")), ("block", tr("Bloque", "Block")), ("underline", tr("Subrayado", "Underline"))] {
+                                    if ui.selectable_label(self.cfg.term_cursor == k, l).clicked() {
+                                        acts.push(Act::SetCursor(k.into()));
+                                    }
+                                }
+                            });
+                        });
                         ui.separator();
                         ui.label(RichText::new("Idioma / Language").small().color(MUTED));
                         ui.horizontal(|ui| {
@@ -1459,7 +1564,7 @@ impl App {
     }
 
     fn central(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
-        egui::CentralPanel::default().frame(Frame::new().fill(term::BG)).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(Frame::new().fill(term::bg())).show(ctx, |ui| {
             if let Some(bid) = self.bot.clone() {
                 self.bot_view(ui, ctx, &bid, acts);
                 return;
@@ -1526,7 +1631,7 @@ impl App {
             // Sub agentes
             if let Some(rt) = self.rt.get(&cid) {
                 if !rt.tracker.agents.is_empty() {
-                    Frame::new().inner_margin(Margin::symmetric(12, 6)).fill(term::BG).show(ui, |ui| {
+                    Frame::new().inner_margin(Margin::symmetric(12, 6)).fill(term::bg()).show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new("SUB AGENTES").small().strong().color(DIM));
                             let ag = &rt.tracker.agents;
@@ -1573,11 +1678,11 @@ impl App {
         let want = std::mem::take(&mut self.want_focus);
         let focused = self.term_owns_keys(ctx);
         let input = std::mem::take(&mut self.term_input);
-        let font = self.font.clone();
+        let style = self.term_style();
         let rt = self.rt.entry(key.to_string()).or_default();
         match &mut rt.term {
             Some(t) if t.is_alive() => {
-                let r = t.ui(ui, &font, input, focused);
+                let r = t.ui(ui, &style, input, focused);
                 if r.clicked() || want {
                     ctx.memory_mut(|m| {
                         if let Some(f) = m.focused() {
@@ -1651,7 +1756,7 @@ impl App {
             });
         });
         if !tasks.is_empty() {
-            Frame::new().inner_margin(Margin::symmetric(12, 6)).fill(term::BG).show(ui, |ui| {
+            Frame::new().inner_margin(Margin::symmetric(12, 6)).fill(term::bg()).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(tr("TAREAS", "TASKS")).small().strong().color(DIM));
                     for (id, proj, title, st, review) in &tasks {
@@ -2022,7 +2127,8 @@ impl App {
                             let ok = t.screen_text().contains("TONYCODE_UPDATE_OK");
                             ui.allocate_ui(vec2(780.0, 340.0), |ui| {
                                 ui.set_min_size(vec2(780.0, 340.0));
-                                t.ui(ui, &FontId::monospace(12.0), vec![], false);
+                                let st = term::Style { size: 12.0, line: 1.1, cursor: term::CursorKind::Bar };
+                                t.ui(ui, &st, vec![], false);
                             });
                             ui.add_space(6.0);
                             if alive {
@@ -2148,26 +2254,71 @@ fn notify(msg: &str) {
     }
 }
 
-fn setup_fonts(ctx: &egui::Context) {
+/// Fuentes monoespaciadas que se buscan en el sistema, en orden de preferencia para "auto".
+/// Cada una: (nombre visible, [regular, negrita, cursiva, negrita cursiva]) con (ruta, índice en .ttc).
+fn font_catalog() -> Vec<(&'static str, [(String, u32); 4])> {
+    let home = config::home();
+    let lib = |f: &str| home.join("Library/Fonts").join(f).to_string_lossy().to_string();
+    let sys = |f: &str| format!("/Library/Fonts/{f}");
+    let term = |f: &str| format!("/System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts/{f}");
+    vec![
+        ("MesloLGS NF", [
+            (lib("MesloLGS NF Regular.ttf"), 0), (lib("MesloLGS NF Bold.ttf"), 0),
+            (lib("MesloLGS NF Italic.ttf"), 0), (lib("MesloLGS NF Bold Italic.ttf"), 0)]),
+        ("JetBrainsMono Nerd Font", [
+            (lib("JetBrainsMonoNerdFont-Regular.ttf"), 0), (lib("JetBrainsMonoNerdFont-Bold.ttf"), 0),
+            (lib("JetBrainsMonoNerdFont-Italic.ttf"), 0), (lib("JetBrainsMonoNerdFont-BoldItalic.ttf"), 0)]),
+        ("JetBrains Mono", [
+            (lib("JetBrainsMono-Regular.ttf"), 0), (lib("JetBrainsMono-Bold.ttf"), 0),
+            (lib("JetBrainsMono-Italic.ttf"), 0), (lib("JetBrainsMono-BoldItalic.ttf"), 0)]),
+        ("SF Mono", [
+            (term("SFMono-Regular.otf"), 0), (term("SFMono-Bold.otf"), 0),
+            (term("SFMono-RegularItalic.otf"), 0), (term("SFMono-BoldItalic.otf"), 0)]),
+        ("SF Mono ", [
+            (sys("SF-Mono-Regular.otf"), 0), (sys("SF-Mono-Bold.otf"), 0),
+            (sys("SF-Mono-RegularItalic.otf"), 0), (sys("SF-Mono-BoldItalic.otf"), 0)]),
+        ("Menlo", [
+            ("/System/Library/Fonts/Menlo.ttc".into(), 0), ("/System/Library/Fonts/Menlo.ttc".into(), 1),
+            ("/System/Library/Fonts/Menlo.ttc".into(), 2), ("/System/Library/Fonts/Menlo.ttc".into(), 3)]),
+    ]
+}
+
+/// Fuentes de la lista que existen en este equipo.
+pub fn available_fonts() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = font_catalog()
+        .into_iter()
+        .filter(|(_, f)| std::path::Path::new(&f[0].0).exists())
+        .map(|(n, _)| n.trim_end())
+        .collect();
+    v.dedup();
+    v
+}
+
+/// Carga fuentes: la monoespaciada elegida (con negrita/cursiva), respaldo de símbolos y emoji.
+fn setup_fonts(ctx: &egui::Context, wanted: &str) -> String {
     let mut fonts = egui::FontDefinitions::default();
-    let candidates: [(&str, &str, bool); 3] = [
-        ("menlo", "/System/Library/Fonts/Menlo.ttc", true),
-        ("symbols", "/System/Library/Fonts/Apple Symbols.ttf", false),
-        ("sfns", "/System/Library/Fonts/SFNS.ttf", false),
-    ];
-    for (name, path, mono_first) in candidates {
-        if let Ok(bytes) = std::fs::read(path) {
-            fonts.font_data.insert(name.into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-            if mono_first {
-                fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, name.into());
-            } else if name == "sfns" {
-                fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, name.into());
-            } else {
-                for fam in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
-                    fonts.families.entry(fam).or_default().push(name.into());
-                }
+    let mut chosen = String::from("Hack");
+    let mut styles: [Option<String>; 4] = [None, None, None, None];
+    for (name, files) in font_catalog() {
+        if !std::path::Path::new(&files[0].0).exists() {
+            continue;
+        }
+        if wanted != "auto" && name.trim_end() != wanted {
+            continue;
+        }
+        for (i, (path, idx)) in files.iter().enumerate() {
+            let path = if std::path::Path::new(path).exists() { path.clone() } else { files[0].0.clone() };
+            let idx = if std::path::Path::new(&files[i].0).exists() { *idx } else { files[0].1 };
+            if let Ok(bytes) = std::fs::read(&path) {
+                let key = format!("term-{i}");
+                let mut fd = egui::FontData::from_owned(bytes);
+                fd.index = idx;
+                fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
+                styles[i] = Some(key);
             }
         }
+        chosen = name.trim_end().to_string();
+        break;
     }
     // Respaldo de símbolos embebido (✻ ❯ ✓ ⚠ ★ ...): no depende de las fuentes del sistema.
     fonts.font_data.insert(
@@ -2178,13 +2329,48 @@ fn setup_fonts(ctx: &egui::Context) {
         "tony-sym".into(),
         std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/TonySymbols.ttf"))),
     );
-    for fam in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
-        let list = fonts.families.entry(fam).or_default();
-        let at = list.iter().position(|n| n == "Hack").map(|i| i + 1).unwrap_or(list.len().min(2));
-        list.insert(at, "tony-sym".into());
-        list.insert(at, "tony-sym-mono".into());
+    for (name, path) in [("symbols", "/System/Library/Fonts/Apple Symbols.ttf"), ("sfns", "/System/Library/Fonts/SFNS.ttf")] {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert(name.into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+        }
     }
+    let has = |n: &str, f: &egui::FontDefinitions| f.font_data.contains_key(n);
+    // Cadena de respaldo común
+    let mut fallback: Vec<String> = vec!["Hack".into(), "tony-sym-mono".into(), "tony-sym".into()];
+    if has("symbols", &fonts) {
+        fallback.push("symbols".into());
+    }
+    fallback.push("NotoEmoji-Regular".into());
+    fallback.push("emoji-icon-font".into());
+    let mono_main = styles[0].clone();
+    let fam = |main: Option<String>| -> Vec<String> {
+        let mut v = Vec::new();
+        if let Some(m) = main {
+            v.push(m);
+        }
+        v.extend(fallback.iter().cloned());
+        v
+    };
+    fonts.families.insert(egui::FontFamily::Monospace, fam(mono_main.clone()));
+    fonts.families.insert(egui::FontFamily::Name("tc-bold".into()), fam(styles[1].clone().or(mono_main.clone())));
+    fonts.families.insert(egui::FontFamily::Name("tc-italic".into()), fam(styles[2].clone().or(mono_main.clone())));
+    fonts.families.insert(egui::FontFamily::Name("tc-bolditalic".into()), fam(styles[3].clone().or(mono_main.clone())));
+    // Interfaz: SF (si existe) + respaldo
+    let prop = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    let mut pv: Vec<String> = Vec::new();
+    if std::path::Path::new("/System/Library/Fonts/SFNS.ttf").exists() {
+        pv.push("sfns".into());
+    }
+    pv.extend(prop.iter().cloned());
+    for extra in ["tony-sym", "tony-sym-mono"] {
+        if !pv.iter().any(|x| x == extra) {
+            let at = pv.iter().position(|n| n == "Ubuntu-Light").map(|i| i + 1).unwrap_or(pv.len());
+            pv.insert(at, extra.into());
+        }
+    }
+    fonts.families.insert(egui::FontFamily::Proportional, pv);
     ctx.set_fonts(fonts);
+    chosen
 }
 
 fn setup_style(ctx: &egui::Context) {

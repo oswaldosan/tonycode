@@ -10,8 +10,77 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-pub const BG: Color32 = Color32::from_rgb(0x0D, 0x0E, 0x10);
-pub const FG: Color32 = Color32::from_rgb(0xD7, 0xDA, 0xE0);
+/// Tema de la terminal: fondo, texto, cursor, selección y los 16 colores ANSI.
+pub struct Theme {
+    pub name: &'static str,
+    pub bg: u32,
+    pub fg: u32,
+    pub cursor: u32,
+    pub sel: u32,
+    pub ansi: [u32; 16],
+}
+
+pub const THEMES: &[Theme] = &[
+    Theme { name: "tonycode", bg: 0x0D0E10, fg: 0xD7DAE0, cursor: 0xF0A070, sel: 0x8AB4FF,
+        ansi: [0x1E2024, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF, 0x5C6370, 0xF07178, 0xB5E08A, 0xF0C060, 0x8AB4FF, 0xD7A6F0, 0x7FD8D0, 0xE6E6E6] },
+    Theme { name: "Dracula", bg: 0x282A36, fg: 0xF8F8F2, cursor: 0xF8F8F2, sel: 0xBD93F9,
+        ansi: [0x21222C, 0xFF5555, 0x50FA7B, 0xF1FA8C, 0xBD93F9, 0xFF79C6, 0x8BE9FD, 0xF8F8F2, 0x6272A4, 0xFF6E6E, 0x69FF94, 0xFFFFA5, 0xD6ACFF, 0xFF92DF, 0xA4FFFF, 0xFFFFFF] },
+    Theme { name: "Catppuccin Mocha", bg: 0x1E1E2E, fg: 0xCDD6F4, cursor: 0xF5E0DC, sel: 0x89B4FA,
+        ansi: [0x45475A, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE, 0x585B70, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xA6ADC8] },
+    Theme { name: "Tokyo Night", bg: 0x1A1B26, fg: 0xC0CAF5, cursor: 0xC0CAF5, sel: 0x7AA2F7,
+        ansi: [0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6, 0x414868, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5] },
+    Theme { name: "One Dark", bg: 0x282C34, fg: 0xABB2BF, cursor: 0x528BFF, sel: 0x61AFEF,
+        ansi: [0x282C34, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF, 0x5C6370, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xFFFFFF] },
+    Theme { name: "Nord", bg: 0x2E3440, fg: 0xD8DEE9, cursor: 0xD8DEE9, sel: 0x88C0D0,
+        ansi: [0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0, 0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4] },
+    Theme { name: "Gruvbox Dark", bg: 0x282828, fg: 0xEBDBB2, cursor: 0xEBDBB2, sel: 0x83A598,
+        ansi: [0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984, 0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2] },
+    Theme { name: "Solarized Dark", bg: 0x002B36, fg: 0x93A1A1, cursor: 0x93A1A1, sel: 0x268BD2,
+        ansi: [0x073642, 0xDC322F, 0x859900, 0xB58900, 0x268BD2, 0xD33682, 0x2AA198, 0xEEE8D5, 0x586E75, 0xCB4B16, 0x586E75, 0x657B83, 0x839496, 0x6C71C4, 0x93A1A1, 0xFDF6E3] },
+];
+
+static THEME_IDX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn set_theme(name: &str) {
+    let i = THEMES.iter().position(|t| t.name == name).unwrap_or(0);
+    THEME_IDX.store(i, Ordering::Relaxed);
+}
+
+pub fn theme() -> &'static Theme {
+    &THEMES[THEME_IDX.load(Ordering::Relaxed).min(THEMES.len() - 1)]
+}
+
+pub fn bg() -> Color32 {
+    hex(theme().bg)
+}
+
+fn fg() -> Color32 {
+    hex(theme().fg)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CursorKind {
+    Bar,
+    Block,
+    Underline,
+}
+
+/// Estilo visual de la terminal (viene de la configuración).
+#[derive(Clone)]
+pub struct Style {
+    pub size: f32,
+    pub line: f32,
+    pub cursor: CursorKind,
+}
+
+fn family(bold: bool, italic: bool) -> egui::FontFamily {
+    match (bold, italic) {
+        (false, false) => egui::FontFamily::Monospace,
+        (true, false) => egui::FontFamily::Name("tc-bold".into()),
+        (false, true) => egui::FontFamily::Name("tc-italic".into()),
+        (true, true) => egui::FontFamily::Name("tc-bolditalic".into()),
+    }
+}
 
 pub struct Cb {
     pub bell: bool,
@@ -203,11 +272,19 @@ impl Term {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, font: &FontId, input: Vec<Event>, focused: bool) -> egui::Response {
+    pub fn ui(&mut self, ui: &mut egui::Ui, style: &Style, input: Vec<Event>, focused: bool) -> egui::Response {
         let rect = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
-        let (cw, rh) = ui.fonts(|f| (f.glyph_width(font, 'M'), f.row_height(font)));
-        let pad = 10.0;
+        let font = FontId::new(style.size, egui::FontFamily::Monospace);
+        // Ancho real de celda: medido sobre una línea larga para que coincida con cómo egui
+        // coloca los caracteres (evita que el texto se corra respecto al cursor).
+        let (cw, text_h) = ui.fonts(|f| {
+            let g = f.layout_no_wrap("M".repeat(200), font.clone(), Color32::WHITE);
+            (g.size().x / 200.0, f.row_height(&font))
+        });
+        let rh = (text_h * style.line).round();
+        let y_off = ((rh - text_h) / 2.0).floor();
+        let pad = 12.0;
         let cols = (((rect.width() - pad * 2.0) / cw).floor() as u16).max(20);
         let rows = (((rect.height() - pad * 2.0) / rh).floor() as u16).max(5);
         self.resize(rows, cols);
@@ -296,7 +373,8 @@ impl Term {
         }
 
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, BG);
+        let bgc = bg();
+        painter.rect_filled(rect, 0.0, bgc);
         let sel = self.sel.map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
         let Ok(p) = self.parser.lock() else { return resp };
         let s = p.screen();
@@ -321,7 +399,13 @@ impl Term {
                     while c < cols {
                         let Some(n) = s.cell(r, c) else { break };
                         let nt = n.contents();
-                        if n.is_wide_continuation() || !(nt.is_empty() || nt.is_ascii()) || colors(n) != (fg, bg) {
+                        if n.is_wide_continuation()
+                            || !(nt.is_empty() || nt.is_ascii())
+                            || colors(n) != (fg, bg)
+                            || n.bold() != cell.bold()
+                            || n.italic() != cell.italic()
+                            || n.underline() != cell.underline()
+                        {
                             break;
                         }
                         text.push_str(if nt.is_empty() { " " } else { nt });
@@ -340,13 +424,18 @@ impl Term {
                 let x = origin.x + start as f32 * cw;
                 let w = (c - start) as f32 * cw;
                 let cell_rect = Rect::from_min_size(pos2(x, y), vec2(w, rh));
-                if bg != BG {
+                if bg != bgc {
                     painter.rect_filled(cell_rect, 0.0, bg);
                 }
                 if let Some(ch) = special {
                     draw_special(&painter, cell_rect, ch, fg, stroke_w);
                 } else if !text.trim().is_empty() {
-                    painter.text(pos2(x, y), egui::Align2::LEFT_TOP, text, font.clone(), fg);
+                    let f = FontId::new(style.size, family(cell.bold(), cell.italic()));
+                    painter.text(pos2(x, y + y_off), egui::Align2::LEFT_TOP, text, f, fg);
+                }
+                if cell.underline() {
+                    let uy = y + y_off + text_h - 1.0;
+                    painter.line_segment([pos2(x, uy), pos2(x + w, uy)], egui::Stroke::new(1.0_f32, fg));
                 }
             }
             // resaltado de selección
@@ -355,17 +444,29 @@ impl Term {
                     let c0 = if r == sr { sc } else { 0 };
                     let c1 = if r == er { ec } else { cols - 1 };
                     let rr = Rect::from_min_max(pos2(origin.x + c0 as f32 * cw, y), pos2(origin.x + (c1 + 1) as f32 * cw, y + rh));
-                    painter.rect_filled(rr, 0.0, Color32::from_rgba_unmultiplied(138, 180, 255, 70));
+                    let sc = hex(theme().sel);
+                    painter.rect_filled(rr, 0.0, Color32::from_rgba_unmultiplied(sc.r(), sc.g(), sc.b(), 80));
                 }
             }
         }
         if !s.hide_cursor() && s.scrollback() == 0 {
             let (cr, cc) = s.cursor_position();
             let r = Rect::from_min_size(origin + vec2(cc as f32 * cw, cr as f32 * rh), vec2(cw, rh));
+            let cc = hex(theme().cursor);
             if focused {
-                painter.rect_filled(r, 1.0, Color32::from_rgba_unmultiplied(0xD7, 0xDA, 0xE0, 150));
+                match style.cursor {
+                    CursorKind::Bar => {
+                        painter.rect_filled(Rect::from_min_size(r.min + vec2(0.0, y_off), vec2(2.0, text_h)), 0.0, cc);
+                    }
+                    CursorKind::Underline => {
+                        painter.rect_filled(Rect::from_min_size(pos2(r.min.x, r.min.y + y_off + text_h - 2.0), vec2(cw, 2.0)), 0.0, cc);
+                    }
+                    CursorKind::Block => {
+                        painter.rect_filled(r, 1.0, Color32::from_rgba_unmultiplied(cc.r(), cc.g(), cc.b(), 170));
+                    }
+                }
             } else {
-                painter.rect_stroke(r, 1.0, egui::Stroke::new(1.0_f32, Color32::from_gray(110)), egui::StrokeKind::Inside);
+                painter.rect_stroke(r, 1.0, egui::Stroke::new(1.0_f32, cc.gamma_multiply(0.5)), egui::StrokeKind::Inside);
             }
         }
         let mut badge: Option<String> = None;
@@ -479,10 +580,6 @@ fn key_bytes(k: Key, m: Modifiers, app: bool) -> Option<Vec<u8>> {
     Some(s.into_bytes())
 }
 
-const PAL16: [u32; 16] = [
-    0x1E2024, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
-    0x5C6370, 0xF07178, 0xB5E08A, 0xF0C060, 0x8AB4FF, 0xD7A6F0, 0x7FD8D0, 0xE6E6E6,
-];
 
 fn hex(v: u32) -> Color32 {
     Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
@@ -490,7 +587,7 @@ fn hex(v: u32) -> Color32 {
 
 fn idx(i: u8) -> Color32 {
     match i {
-        0..=15 => hex(PAL16[i as usize]),
+        0..=15 => hex(theme().ansi[i as usize]),
         16..=231 => {
             let i = i - 16;
             let lv = [0u8, 95, 135, 175, 215, 255];
@@ -505,12 +602,12 @@ fn idx(i: u8) -> Color32 {
 
 fn colors(cell: &vt100::Cell) -> (Color32, Color32) {
     let mut fg = match cell.fgcolor() {
-        vt100::Color::Default => FG,
+        vt100::Color::Default => fg(),
         vt100::Color::Idx(i) => idx(if cell.bold() && i < 8 { i + 8 } else { i }),
         vt100::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
     };
     let mut bg = match cell.bgcolor() {
-        vt100::Color::Default => BG,
+        vt100::Color::Default => bg(),
         vt100::Color::Idx(i) => idx(i),
         vt100::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
     };
