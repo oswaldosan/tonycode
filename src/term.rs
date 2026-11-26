@@ -108,6 +108,10 @@ pub struct Term {
     scroll_acc: f32,
     sel: Option<((u16, u16), (u16, u16))>,
     copied_at: Option<Instant>,
+    /// Texto en composición (tecla muerta, IME): se muestra en el cursor hasta confirmarse.
+    preedit: String,
+    /// Posición del cursor en pantalla (para ubicar la ventana del IME).
+    pub last_cursor: Option<Rect>,
 }
 
 impl Drop for Term {
@@ -183,6 +187,8 @@ impl Term {
             scroll_acc: 0.0,
             sel: None,
             copied_at: None,
+            preedit: String::new(),
+            last_cursor: None,
         })
     }
 
@@ -197,6 +203,20 @@ impl Term {
     pub fn write(&mut self, bytes: &[u8]) {
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
+    }
+
+    /// Pega texto respetando el modo "bracketed paste" del programa.
+    pub fn paste(&mut self, t: &str) {
+        let bracketed = self.parser.lock().map(|p| p.screen().bracketed_paste()).unwrap_or(false);
+        let mut out = Vec::new();
+        if bracketed {
+            out.extend_from_slice(b"\x1b[200~");
+            out.extend_from_slice(t.as_bytes());
+            out.extend_from_slice(b"\x1b[201~");
+        } else {
+            out.extend_from_slice(t.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
+        }
+        self.write(&out);
     }
 
     #[allow(dead_code)]
@@ -452,7 +472,16 @@ impl Term {
         if !s.hide_cursor() && s.scrollback() == 0 {
             let (cr, cc) = s.cursor_position();
             let r = Rect::from_min_size(origin + vec2(cc as f32 * cw, cr as f32 * rh), vec2(cw, rh));
+            self.last_cursor = Some(r);
             let cc = hex(theme().cursor);
+            if !self.preedit.is_empty() {
+                let f = FontId::new(style.size, egui::FontFamily::Monospace);
+                let g = painter.layout_no_wrap(self.preedit.clone(), f, cc);
+                let pr = Rect::from_min_size(r.min, vec2(g.size().x.max(cw), rh));
+                painter.rect_filled(pr, 0.0, bgc);
+                painter.galley(pos2(r.min.x, r.min.y + y_off), g, cc);
+                painter.line_segment([pos2(pr.min.x, r.min.y + y_off + text_h), pos2(pr.max.x, r.min.y + y_off + text_h)], egui::Stroke::new(1.0_f32, cc));
+            }
             if focused {
                 match style.cursor {
                     CursorKind::Bar => {
@@ -470,6 +499,11 @@ impl Term {
             }
         }
         let mut badge: Option<String> = None;
+        if !ui.input(|i| i.raw.hovered_files.is_empty()) && resp.contains_pointer() {
+            painter.rect_filled(rect.shrink(6.0), 10.0, Color32::from_rgba_unmultiplied(138, 180, 255, 28));
+            painter.rect_stroke(rect.shrink(6.0), 10.0, egui::Stroke::new(1.5_f32, hex(theme().sel)), egui::StrokeKind::Inside);
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, tr("Suelta para adjuntar a Claude", "Drop to attach to Claude"), FontId::proportional(15.0), Color32::from_gray(230));
+        }
         if s.scrollback() > 0 {
             badge = Some(trf!("↑ {} líneas · Shift+PgDn o escribe para volver", "↑ {} lines · Shift+PgDn or type to return", s.scrollback()));
         }
@@ -505,6 +539,12 @@ impl Term {
         for ev in events {
             match ev {
                 Event::Text(t) => out.extend_from_slice(t.as_bytes()),
+                Event::Ime(egui::ImeEvent::Commit(t)) => {
+                    self.preedit.clear();
+                    out.extend_from_slice(t.as_bytes());
+                }
+                Event::Ime(egui::ImeEvent::Preedit(t)) => self.preedit = t,
+                Event::Ime(egui::ImeEvent::Enabled) | Event::Ime(egui::ImeEvent::Disabled) => self.preedit.clear(),
                 Event::Paste(t) => {
                     if bracketed {
                         out.extend_from_slice(b"\x1b[200~");

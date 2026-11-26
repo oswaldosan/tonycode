@@ -60,6 +60,9 @@ Flujo: haz cambios donde quieras, `git push` a master, y la app se actualiza sol
 | Doble clic / triple clic | Copia la palabra / la línea |
 | Rueda o trackpad | Scroll del historial (o se envía a Claude si usa el mouse) |
 | Shift+PgUp / Shift+PgDn | Scroll del historial por páginas |
+| Ctrl+V o botón **Pegar imagen** | Claude toma la imagen del portapapeles |
+| Arrastrar archivos o imágenes | Inserta su ruta para que Claude los adjunte |
+| Tildes y ñ (´ + e, ~ + n) | Composición normal de macOS |
 
 El teclado va a la terminal siempre que no estés escribiendo en un campo de texto.
 

@@ -127,6 +127,7 @@ enum Act {
     Commit,
     Revert,
     SetLang(String),
+    PasteImage(String),
     SetTheme(String),
     SetFont(String),
     SetTermSize(f32),
@@ -621,7 +622,7 @@ impl App {
             let mut take = Vec::new();
             for e in i.events.drain(..) {
                 match &e {
-                    egui::Event::Text(_) | egui::Event::Paste(_) => take.push(e),
+                    egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(_) => take.push(e),
                     #[cfg(not(target_os = "macos"))]
                     egui::Event::Copy | egui::Event::Cut => take.push(e),
                     egui::Event::Key { modifiers, .. } if !modifiers.mac_cmd => take.push(e),
@@ -1010,6 +1011,13 @@ impl App {
             Act::SetCursor(c) => {
                 self.cfg.term_cursor = c;
                 self.cfg.save();
+            }
+            Act::PasteImage(key) => {
+                // Claude Code toma la imagen del portapapeles cuando recibe Ctrl+V.
+                if let Some(t) = self.rt.get_mut(&key).and_then(|r| r.term.as_mut()) {
+                    t.write(&[0x16]);
+                    self.want_focus = true;
+                }
             }
             Act::SetLang(l) => {
                 crate::i18n::set_lang(&l);
@@ -1615,6 +1623,16 @@ impl App {
                                 acts.push(Act::RefreshDiff);
                             }
                         }
+                        if ui
+                            .button(tr("Pegar imagen", "Paste image"))
+                            .on_hover_text(tr(
+                                "Pega la imagen del portapapeles en Claude (igual que Ctrl+V). También puedes arrastrar imágenes o archivos a la terminal.",
+                                "Pastes the clipboard image into Claude (same as Ctrl+V). You can also drag images or files onto the terminal.",
+                            ))
+                            .clicked()
+                        {
+                            acts.push(Act::PasteImage(cid.clone()));
+                        }
                         if ui.selectable_label(self.files, tr("Archivos", "Files")).clicked() {
                             self.files = !self.files;
                             if self.files {
@@ -1683,6 +1701,21 @@ impl App {
         match &mut rt.term {
             Some(t) if t.is_alive() => {
                 let r = t.ui(ui, &style, input, focused);
+                if focused {
+                    let cur = t.last_cursor.unwrap_or(r.rect);
+                    ctx.output_mut(|o| o.ime = Some(egui::output::IMEOutput { rect: r.rect, cursor_rect: cur }));
+                }
+                let dropped: Vec<String> = ctx.input(|i| {
+                    i.raw.dropped_files.iter().filter_map(|f| f.path.as_ref().map(|p| p.to_string_lossy().to_string())).collect()
+                });
+                if !dropped.is_empty() {
+                    let txt = dropped
+                        .iter()
+                        .map(|p| if p.contains(' ') || p.contains('\'') { format!("'{}'", p.replace('\'', "'\\''")) } else { p.clone() })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    t.paste(&format!("{txt} "));
+                }
                 if r.clicked() || want {
                     ctx.memory_mut(|m| {
                         if let Some(f) = m.focused() {
@@ -1742,6 +1775,13 @@ impl App {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("↻").on_hover_text(tr("Reiniciar sesión del bot", "Restart bot session")).clicked() {
                         acts.push(Act::RestartBot(bot.id.clone()));
+                    }
+                    if ui
+                        .button(tr("Pegar imagen", "Paste image"))
+                        .on_hover_text(tr("Pega la imagen del portapapeles en Claude (igual que Ctrl+V)", "Pastes the clipboard image into Claude (same as Ctrl+V)"))
+                        .clicked()
+                    {
+                        acts.push(Act::PasteImage(bot.id.clone()));
                     }
                     ui.separator();
                     for a in self.cfg.accounts.iter().rev() {
