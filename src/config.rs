@@ -106,6 +106,13 @@ pub struct Config {
     pub term_line: f32,
     #[serde(default = "d_cursor")]
     pub term_cursor: String,
+    /// Modo voz: leer un resumen al terminar cada respuesta (con `say`).
+    #[serde(default)]
+    pub voice_enabled: bool,
+    #[serde(default)]
+    pub voice_name: String,
+    #[serde(default = "d_rate")]
+    pub voice_rate: u32,
     /// "es" o "en"
     #[serde(default = "d_lang")]
     pub lang: String,
@@ -143,6 +150,9 @@ fn d_line() -> f32 {
 }
 fn d_cursor() -> String {
     "bar".into()
+}
+fn d_rate() -> u32 {
+    195
 }
 fn d_lang() -> String {
     "es".into()
@@ -212,6 +222,9 @@ impl Config {
             notify: true,
             default_account: d_work(),
             lang: d_lang(),
+            voice_enabled: false,
+            voice_name: String::new(),
+            voice_rate: d_rate(),
             term_theme: d_theme(),
             term_font: d_auto(),
             term_size: d_size(),

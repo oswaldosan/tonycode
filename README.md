@@ -57,6 +57,7 @@ Flujo: haz cambios donde quieras, `git push` a master, y la app se actualiza sol
 | Cmd+S | Guardar archivo en el editor |
 | Cmd+V | Pegar en la terminal |
 | Esc | Cerrar panel de GitHub |
+| Cmd+. | Detener la voz |
 | Seleccionar con el mouse | Copia al portapapeles automáticamente |
 | Doble clic / triple clic | Copia la palabra / la línea |
 | Rueda o trackpad | Scroll del historial (o se envía a Claude si usa el mouse) |
@@ -77,6 +78,19 @@ En **tonycode ▾ → Terminal**:
 
 Los símbolos de Claude Code (logo, cajas, spinners, ⎿) se dibujan a mano para que siempre se vean alineados.
 
+## Voz
+
+**Dictar (Claude Code nativo):** escribe `/voice tap` una vez en un chat de cada cuenta de Claude. Luego toca Espacio para hablar y otra vez para enviar (o `/voice hold` para mantener Espacio). La primera vez macOS pide permiso de micrófono para tonycode. El idioma del dictado sale del ajuste `language` de Claude (`/config`).
+
+**Respuestas por voz:** en **tonycode ▾ → Voz** activa "Leer un resumen cuando Claude termine" y reinicia los chats abiertos (↻). Desde ahí:
+
+- Cuando Claude termina, tonycode lee en voz alta un resumen corto (Claude cierra cada respuesta con una línea "Resumen:"). Si el chat no es el que estás viendo, empieza con su nombre.
+- Si un chat pide permiso, te lo dice.
+- **Escuchar** en la barra del chat repite el último resumen; **■ Detener voz** o Cmd+. lo corta.
+- Puedes elegir la voz del sistema (por ejemplo Paulina o Mónica) y la velocidad.
+
+Usa los hooks `Stop` y `Notification` de Claude Code, pasados con `--settings` solo para las sesiones de tonycode; tus archivos de configuración de Claude no se tocan.
+
 ## Idioma
 
 Español o inglés desde **tonycode ▾ → Idioma / Language**. Cambia al instante y se guarda. También traduce el comando `./tc` y las instrucciones del bot líder (en inglés el bot trabaja y responde en inglés; reinícialo para que tome el cambio).
@@ -90,6 +104,9 @@ claude_cmd = "claude"     # ruta o nombre del binario
 login_shell = true        # lanza claude vía tu shell (-lic) para heredar PATH de nvm/bun
 notify = true             # notificaciones de macOS
 lang = "es"               # "es" o "en"
+voice_enabled = false     # leer resumen al terminar
+voice_name = ""           # vacío = voz predeterminada, o "Paulina", "Mónica"...
+voice_rate = 195
 term_theme = "Catppuccin Mocha"
 term_font = "auto"        # o "MesloLGS NF", "SF Mono", "Menlo"...
 term_size = 14.0

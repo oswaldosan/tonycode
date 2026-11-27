@@ -9,9 +9,13 @@ mod git;
 mod ssh;
 mod term;
 mod updater;
+mod voice;
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|a| a == "hook").unwrap_or(false) {
+        std::process::exit(voice::hook_cli());
+    }
     if let Some(code) = bots::cli(&args) {
         std::process::exit(code);
     }

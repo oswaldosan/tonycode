@@ -3,7 +3,7 @@ use crate::term::{self, Term};
 use crate::i18n::tr;
 use crate::trf;
 use crate::updater::{self, Upd};
-use crate::{bots, claude, git, ssh};
+use crate::{bots, claude, git, ssh, voice};
 use std::sync::{Arc, Mutex};
 use egui::{Align, Align2, Color32, Frame, Key, Layout, Margin, Modifiers, RichText, Sense, vec2};
 use std::collections::HashMap;
@@ -52,6 +52,7 @@ struct ChatRt {
     branch: String,
     branch_at: Option<Instant>,
     err: Option<String>,
+    last_summary: Option<String>,
 }
 
 impl ChatRt {
@@ -144,6 +145,12 @@ enum Act {
     Commit,
     Revert,
     SetLang(String),
+    ToggleVoice,
+    SetVoice(String),
+    SetVoiceRate(u32),
+    TestVoice,
+    Replay(String),
+    StopVoice,
     SetExpanded(String, Option<bool>),
     ExpandAll(Option<bool>),
     PasteImage(String),
@@ -207,6 +214,9 @@ pub struct App {
     /// Búsqueda manual en curso: al terminar, si hay cambios se actualiza solo.
     upd_checking: Arc<std::sync::atomic::AtomicBool>,
     upd_auto: bool,
+    speaking: Option<std::process::Child>,
+    voices_cache: Option<(String, Vec<(String, String)>)>,
+    last_events: Instant,
 }
 
 impl App {
@@ -257,6 +267,9 @@ impl App {
             upd_term: None,
             upd_checking: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             upd_auto: false,
+            speaking: None,
+            voices_cache: None,
+            last_events: Instant::now(),
         };
         updater::spawn_checker(app.upd.clone(), cc.egui_ctx.clone());
         if let Some(id) = last {
@@ -315,21 +328,37 @@ impl App {
                 prompt_file = Some(f);
             }
         }
+        // Modo voz: hooks (Stop / permiso) y pedirle a Claude una línea "Resumen:" al final.
+        let voice_files = if self.cfg.voice_enabled { voice::prepare_files(crate::i18n::en()) } else { None };
+        let mut extra: Vec<String> = Vec::new();
+        if let Some((settings, append)) = &voice_files {
+            extra.push("--settings".into());
+            extra.push(settings.to_string_lossy().to_string());
+            extra.push("--append-system-prompt-file".into());
+            extra.push(append.to_string_lossy().to_string());
+        }
         let (prog, args) = if self.cfg.login_shell {
             let sh = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
             let mut line = format!("exec {} {} {}", self.cfg.claude_cmd, flag, sid);
+            for e in &extra {
+                line.push_str(&format!(" '{}'", e.replace('\'', "'\\''")));
+            }
             if let Some(f) = &prompt_file {
                 line.push_str(&format!(" \"$(cat '{}')\"", f.display()));
             }
             (sh, vec!["-lic".to_string(), line])
         } else {
             let mut a = vec![flag.to_string(), sid];
+            a.extend(extra.iter().cloned());
             if let Some(pr) = prompt {
                 a.push(pr);
             }
             (self.cfg.claude_cmd.clone(), a)
         };
-        let mut env = vec![("CLAUDE_CONFIG_DIR".to_string(), acct_dir.to_string_lossy().to_string())];
+        let mut env = vec![
+            ("CLAUDE_CONFIG_DIR".to_string(), acct_dir.to_string_lossy().to_string()),
+            ("TONYCODE_CHAT".to_string(), key.to_string()),
+        ];
         env.extend(extra_env);
         let rt = self.rt.entry(key.to_string()).or_default();
         if !cwd.exists() {
@@ -705,6 +734,76 @@ impl App {
     }
 
 
+    fn say(&mut self, text: &str) {
+        if let Some(mut c) = self.speaking.take() {
+            let _ = c.kill();
+        }
+        self.speaking = voice::speak(text, &self.cfg.voice_name, self.cfg.voice_rate);
+    }
+
+    fn stop_speaking(&mut self) {
+        if let Some(mut c) = self.speaking.take() {
+            let _ = c.kill();
+        }
+    }
+
+    fn is_speaking(&mut self) -> bool {
+        match &mut self.speaking {
+            Some(c) => match c.try_wait() {
+                Ok(None) => true,
+                _ => {
+                    self.speaking = None;
+                    false
+                }
+            },
+            None => false,
+        }
+    }
+
+    /// Eventos de los hooks de Claude (terminó / pide permiso).
+    fn process_events(&mut self) {
+        if self.last_events.elapsed() < Duration::from_millis(500) {
+            return;
+        }
+        self.last_events = Instant::now();
+        let Ok(rd) = std::fs::read_dir(voice::events_dir()) else { return };
+        let mut files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().map(|e| e == "json").unwrap_or(false)).collect();
+        files.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+        for f in files {
+            let ev = std::fs::read_to_string(&f).ok().and_then(|s| serde_json::from_str::<voice::HookEvent>(&s).ok());
+            let _ = std::fs::remove_file(&f);
+            let Some(ev) = ev else { continue };
+            let name = self
+                .cfg
+                .find_chat(&ev.chat)
+                .map(|(_, c)| c.name.clone())
+                .or_else(|| self.cfg.bot(&ev.chat).map(|b| b.name.clone()))
+                .unwrap_or_default();
+            let active = self.chat.as_deref() == Some(ev.chat.as_str()) || self.bot.as_deref() == Some(ev.chat.as_str());
+            match ev.event.as_str() {
+                "Stop" => {
+                    let summary = voice::spoken_summary(&ev.text);
+                    let rt = self.rt.entry(ev.chat.clone()).or_default();
+                    rt.last_summary = Some(summary.clone());
+                    if !active {
+                        rt.review = true;
+                    }
+                    if self.cfg.voice_enabled && !summary.is_empty() {
+                        let t = if active { summary } else { trf!("{name}: {summary}", "{name}: {summary}") };
+                        self.say(&t);
+                    }
+                }
+                "Notification" => {
+                    if self.cfg.voice_enabled {
+                        let t = trf!("{name} necesita tu permiso", "{name} needs your permission");
+                        self.say(&t);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn term_style(&self) -> term::Style {
         term::Style {
             size: self.cfg.term_size.clamp(9.0, 24.0),
@@ -725,6 +824,9 @@ impl App {
         }
         if self.gh_open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             self.gh_open = false;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Period)) {
+            acts.push(Act::StopVoice);
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) {
             self.save_editor();
@@ -1053,6 +1155,36 @@ impl App {
                 }
                 self.cfg.save();
             }
+            Act::ToggleVoice => {
+                self.cfg.voice_enabled = !self.cfg.voice_enabled;
+                self.cfg.save();
+                if self.cfg.voice_enabled {
+                    self.toast(tr(
+                        "Modo voz activado. Reinicia los chats abiertos (↻) para que lo tomen.",
+                        "Voice mode on. Restart open chats (↻) so they pick it up.",
+                    ));
+                } else {
+                    self.stop_speaking();
+                }
+            }
+            Act::SetVoice(v) => {
+                self.cfg.voice_name = v;
+                self.cfg.save();
+                self.say(tr("Hola, así sueno.", "Hi, this is how I sound."));
+            }
+            Act::SetVoiceRate(r) => {
+                self.cfg.voice_rate = r;
+                self.cfg.save();
+            }
+            Act::TestVoice => {
+                self.say(tr("Listo. Arreglé el bug de agencias y los tests pasan.", "Done. I fixed the agencies bug and the tests pass."));
+            }
+            Act::Replay(id) => {
+                if let Some(s) = self.rt.get(&id).and_then(|r| r.last_summary.clone()) {
+                    self.say(&s);
+                }
+            }
+            Act::StopVoice => self.stop_speaking(),
             Act::SetLang(l) => {
                 crate::i18n::set_lang(&l);
                 self.cfg.lang = l;
@@ -1204,6 +1336,51 @@ impl App {
                                 }
                             });
                         });
+                        ui.menu_button(tr("Voz", "Voice"), |ui| {
+                            ui.set_min_width(280.0);
+                            let mut on = self.cfg.voice_enabled;
+                            if ui.checkbox(&mut on, tr("Leer un resumen cuando Claude termine", "Read a summary when Claude finishes")).changed() {
+                                acts.push(Act::ToggleVoice);
+                            }
+                            ui.separator();
+                            let lang = if crate::i18n::en() { "en" } else { "es" };
+                            if self.voices_cache.as_ref().map(|(l, _)| l != lang).unwrap_or(true) {
+                                self.voices_cache = Some((lang.to_string(), voice::voices(lang)));
+                            }
+                            ui.label(RichText::new(tr("Voz del sistema", "System voice")).small().color(MUTED));
+                            if ui.selectable_label(self.cfg.voice_name.is_empty(), tr("Predeterminada", "Default")).clicked() {
+                                acts.push(Act::SetVoice(String::new()));
+                            }
+                            let list = self.voices_cache.as_ref().map(|(_, v)| v.clone()).unwrap_or_default();
+                            egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                                for (name, loc) in list {
+                                    let t = format!("{name}  ({loc})");
+                                    if ui.selectable_label(self.cfg.voice_name == name, t).clicked() {
+                                        acts.push(Act::SetVoice(name.clone()));
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(tr("Velocidad", "Speed")).small().color(MUTED));
+                                for (r, l) in [(170_u32, tr("Pausada", "Slow")), (195, tr("Normal", "Normal")), (230, tr("Rápida", "Fast"))] {
+                                    if ui.selectable_label(self.cfg.voice_rate == r, l).clicked() {
+                                        acts.push(Act::SetVoiceRate(r));
+                                    }
+                                }
+                            });
+                            if ui.button(tr("Probar voz", "Test voice")).clicked() {
+                                acts.push(Act::TestVoice);
+                            }
+                            ui.separator();
+                            ui.label(
+                                RichText::new(tr(
+                                    "Dictar: escribe /voice tap una vez en Claude (por cuenta). Luego toca Espacio para hablar y otra vez para enviar.",
+                                    "Dictation: type /voice tap once in Claude (per account). Then tap Space to talk and again to send.",
+                                ))
+                                .small()
+                                .color(DIM),
+                            );
+                        });
                         ui.separator();
                         ui.label(RichText::new("Idioma / Language").small().color(MUTED));
                         ui.horizontal(|ui| {
@@ -1248,6 +1425,8 @@ impl App {
     }
 
     fn status_bar(&mut self, ctx: &egui::Context) {
+        let speaking = self.is_speaking();
+        let mut stop_voice = false;
         egui::TopBottomPanel::bottom("status")
             .exact_height(26.0)
             .frame(Frame::new().fill(PANEL).inner_margin(Margin::symmetric(12, 3)).stroke(egui::Stroke::new(1.0_f32, LINE)))
@@ -1263,6 +1442,13 @@ impl App {
                     let need = self.rt.values().filter(|r| r.attention()).count();
                     if need > 0 {
                         ui.label(RichText::new(trf!("{need} te necesitan", "{need} need you")).small().color(NEED));
+                    }
+                    if speaking {
+                        let b = egui::Button::new(RichText::new(tr("■ Detener voz", "■ Stop voice")).small().color(TEXT)).small();
+                        if ui.add(b).on_hover_text("Cmd+.").clicked() {
+                            stop_voice = true;
+                        }
+                        ctx.request_repaint_after(Duration::from_millis(400));
                     }
                     if let Some((m, t)) = &self.toast {
                         if t.elapsed().as_secs() < 6 {
@@ -1318,6 +1504,9 @@ impl App {
                     });
                 });
             });
+        if stop_voice {
+            self.stop_speaking();
+        }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
@@ -1683,6 +1872,15 @@ impl App {
                                 self.files = false;
                                 acts.push(Act::RefreshDiff);
                             }
+                        }
+                        let has_sum = self.rt.get(&cid).and_then(|r| r.last_summary.as_ref()).is_some();
+                        if has_sum
+                            && ui
+                                .button(tr("Escuchar", "Listen"))
+                                .on_hover_text(tr("Lee en voz alta el resumen de la última respuesta", "Reads aloud the summary of the last reply"))
+                                .clicked()
+                        {
+                            acts.push(Act::Replay(cid.clone()));
                         }
                         if ui
                             .button(tr("Pegar imagen", "Paste image"))
@@ -2320,6 +2518,7 @@ impl eframe::App for App {
         self.grab_term_input(ctx);
         self.scan(ctx);
         self.after_check(ctx);
+        self.process_events();
         self.process_inbox(ctx);
         self.write_bot_status();
         self.top_bar(ctx, &mut acts);
